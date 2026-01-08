@@ -1,201 +1,215 @@
-# Roadside Assistance App
+# Roadside App
 
 Българско мобилно приложение за пътна помощ, което свързва клиенти с шофьори за бърза и надеждна помощ на пътя.
 
-## Възможности
+A Bulgarian mobile app for roadside assistance that connects clients with drivers for fast, reliable help on the road.
 
-### Потребители
-- 📱 **Регистрация** с SMS верификация
-- 👤 **Три типа профили**: Клиенти, Шофьори и Администратори
-- 📞 **Телефонна верификация** за сигурност
-- 🆔 **Автентификация** с имейл и парола
+## Features
 
-### Шофьори
-- 🏢 **Фирмена информация** (име, булстат)
-- 📄 **Документи** (удостоверение за пътна помощ, ИААА лиценз)
-- 📸 **Снимка на шофьор** с camera/gallery опции
-- ✅ **Система за одобрение** от администратори
-- 📊 **Статуси**: pending/approved/rejected
+### Client Features
+- Create assistance requests with GPS location
+- Upload photos of the situation (compressed automatically)
+- Real-time bids from nearby drivers
+- Interactive map showing driver locations
+- 20-minute countdown timer for requests
+- Stripe payment integration
+- Offline resilience - orders persist, bids sync when back online
 
-### Администратори
-- 🔐 **Административен панел** за управление на шофьори
-- ✅ **Одобряване/отхвърляне** на регистрации
-- 📋 **Преглед на документи** и данни на шофьори
-- 📝 **Бележки при верификация**
+### Driver Features
+- Receive new requests in real-time
+- Submit price offers (bids)
+- GPS tracking with distance to client
+- Auto-calculated arrival time
+- Online/offline status toggle
+- Multiple bids per order supported
 
-### Технически възможности
-- 🔐 **Firebase аутентификация и база данни**
-- 📨 **SMS верификация** (демо + production готовност)
-- 📷 **Image picker** с camera и gallery
-- 🎨 **Модерен UI** в оранжева тематика
-- 📱 **React Native + Expo + TypeScript**
-- 🛡️ **Role-based access control**
+### Admin Features
+- Driver verification and approval
+- Document review (license, company registration)
+- Admin panel (separate React app in `/admin-panel`)
 
-## SMS Верификация
+## Tech Stack
 
-Приложението включва напреднала SMS верификация система:
+| Category | Technology |
+|----------|------------|
+| Framework | React Native + Expo SDK 53 (dev-client) |
+| React Native | 0.79.4 |
+| Navigation | React Navigation (Stack) |
+| Backend | Firebase (Firestore, Auth, Functions, Storage) |
+| Payments | Stripe (15% platform fee) |
+| Maps | Leaflet.js (in WebView) |
+| Location | expo-location |
+| Notifications | expo-notifications |
+| Language | TypeScript |
 
-### Демо Режим (текущо)
-- Генерира 6-цифрени кодове
-- Кодовете се показват в конзолата
-- Валидност 5 минути
-- Форматиране на български номера (+359)
-
-### Production Готовност
-- Поддръжка за SMS.bg, VivaKom, Telenor, Twilio
-- Environment variable конфигурация
-- Rate limiting и сигурност
-- Подробна документация в `docs/SMS_SETUP.md`
-
-## Технологии
-
-- **Frontend**: React Native, Expo, TypeScript
-- **Navigation**: React Navigation
-- **Auth**: Firebase Authentication (REST API)
-- **Storage**: Firebase Storage
-- **Database**: Firebase Firestore
-- **SMS**: Custom SMS service (производствено готов)
-- **Image**: Expo Image Picker
-
-## Инсталация и Стартиране
+## Quick Start
 
 ```bash
-# Клониране на проекта
-git clone <repository-url>
-cd roadside-assistance
+# Clone the repo
+git clone https://github.com/Sashlex99/roadside-app.git
+cd roadside-app
 
-# Инсталиране на зависимости
+# Install dependencies
 npm install
 
-# Стартиране на development сървър
-npx expo start
+# Start development server (requires dev-client build)
+npx expo start --dev-client --tunnel
 
-# За почистване на cache
-npx expo start --clear
+# For Firebase Functions
+cd functions && npm install
 ```
 
-## Структура на проекта
+## Project Structure
 
 ```
 src/
-├── components/          # Reusable компоненти
-├── constants/          # Константи (цветове, размери)
-├── navigation/         # Navigation конфигурация
-├── screens/           # Екрани на приложението
-│   └── auth/         # Автентификация екрани
-├── services/         # API и external услуги
-│   ├── firebaseAPI.ts    # Firebase REST API
-│   └── smsService.ts     # SMS верификация
-└── config/           # Конфигурационни файлове
-    └── firebase.ts      # Firebase настройки
+├── components/          # Reusable components
+│   ├── client/         # Client-specific (RequestForm, BidsList)
+│   ├── driver/         # Driver-specific (OrderCard, BidForm)
+│   └── shared/         # Shared (Header, Map, Modal)
+├── screens/            # Screen components
+│   ├── auth/           # Login, Register
+│   ├── client/         # ClientHomeScreen, MyOrdersScreen
+│   └── driver/         # DriverHomeScreen
+├── hooks/              # Custom React hooks
+│   ├── client/         # useClientOrders, useClientPayments
+│   ├── driver/         # useDriverOrders
+│   └── shared/         # useCurrentLocation
+├── services/           # API & external services
+│   ├── firestore.ts    # Firestore operations
+│   ├── firestoreREST.ts # REST API fallback
+│   ├── locationService.ts # Location with circuit breaker
+│   └── smsService.ts   # SMS verification
+├── utils/              # Utility functions
+│   ├── circuitBreakerInstances.ts
+│   └── timeoutUtils.ts
+├── contexts/           # React contexts
+│   └── AuthContext.tsx
+├── constants/          # Colors, sizes
+└── config/             # Firebase config
+
+admin-panel/            # Separate React admin dashboard
+functions/              # Firebase Cloud Functions
 ```
 
-## Функционалности по екрани
+## Database Structure (Firestore)
 
-### LoginScreen
-- Вход с имейл и парола
-- Навигация към регистрация
-- Firebase интеграция
+### Collections
+1. **`users`** - Clients, Drivers, Admins
+2. **`orders`** - Assistance requests
+3. **`orders/{orderId}/bids`** - Driver bids (subcollection)
+4. **`driverLocations`** - Real-time driver positions
+5. **`notifications`** - Push notifications
+6. **`driverLocks`** - Race condition prevention
 
-### RegisterScreen
-- Избор клиент/шофьор
-- Основни данни (име, телефон, имейл, парола)
-- SMS верификация на телефон
-- За шофьори: фирмени данни + документи
-- Image picker за документи
-- Валидация и error handling
+### Order Statuses
+```
+pending → searching → bidding → accepted → in_progress → completed
+```
+Also: `cancelled`, `expired`, `payment_pending`
 
-## Firebase Конфигурация
+## Payment Flow
 
-Проектът използва Firebase REST API за:
-- Автентификация (`signIn`, `signUp`)
-- Firestore документи (`createDocument`, `getDocument`)
-- Storage файлове (`uploadFile`)
+```
+Client accepts bid → Stripe Payment Link created → Client pays →
+Deep link returns to app → Order status updated to 'accepted'
+```
 
-API ключ и настройки в `src/config/firebase.ts`
+Platform takes 15% fee, driver receives the rest directly via Stripe Connect.
 
-## SMS Настройки
+## Architecture Highlights
 
-За production SMS изпращане вижте `docs/SMS_SETUP.md`:
-- SMS.bg интеграция
-- VivaKom Gateway
-- Twilio поддръжка
-- Environment variables
+### Circuit Breaker Pattern
+Location and geocoding services use circuit breakers to handle transient failures gracefully. Falls back to coordinates when geocoding is unavailable.
 
-## Разработка
+### Firebase SDK Bug Workaround
+The app includes a multi-layer fallback for the Firebase SDK Promise bug (addDoc hangs in RN 0.79):
+1. SDK + 10s timeout with `Promise.race()`
+2. Real-time listener detects document if SDK hangs
+3. REST API fallback (direct HTTP to Firestore)
+4. Duplicate prevention with `creationToken`
 
-### Добавяне на нови екрани
-1. Създайте нов файл в `src/screens/`
-2. Добавете към navigation в `src/navigation/`
-3. Импортирайте нужните типове и services
+### Race Condition Prevention
+Driver locking system prevents double-booking when multiple clients try to accept the same driver simultaneously.
 
-### Стилизиране
-- Използвайте константите от `src/constants/colors.ts`
-- Следвайте съществуващите StyleSheet patterns
-- Поддържайте оранжевата тематика
+### Offline Resilience
+- Orders persist server-side when client goes offline
+- Drivers can bid even if client is disconnected
+- Bids sync automatically when client reconnects
 
-### API интеграция
-- Firebase функции в `src/services/firebaseAPI.ts`
-- SMS функции в `src/services/smsService.ts`
-- Error handling с try/catch и Alert
+## Available Scripts
 
-## Deployment
+| Command | Description |
+|---------|-------------|
+| `npx expo start --dev-client --tunnel` | **Primary dev command** |
+| `npm run android` | Run on Android |
+| `npm run ios` | Run on iOS |
+| `npm run emulators` | Start Firebase emulators |
+| `npm run lint` | Run ESLint |
 
-### Expo EAS Build
+## Building for Production
+
 ```bash
-# Инсталиране на EAS CLI
+# Install EAS CLI
 npm install -g @expo/eas-cli
 
-# Login в Expo
+# Login to Expo
 eas login
 
-# Конфигуриране и build
-eas build:configure
-eas build --platform android
+# Build for Android
+eas build --platform android --profile production
 
-# Submit в Play Store
-eas submit --platform android
+# Build for iOS
+eas build --platform ios --profile production
 ```
 
-### Environment Variables
+## Environment Setup
+
+Required environment variables (create `.env` file):
 ```bash
-# .env.production
+# Firebase (already in firebase.ts, but can override)
+FIREBASE_API_KEY=your-key
+
+# SMS Provider (for production)
 SMS_PROVIDER=sms.bg
-SMS_API_KEY=your-api-key
-FIREBASE_API_KEY=your-firebase-key
+SMS_API_KEY=your-sms-key
+
+# Stripe
+STRIPE_PUBLISHABLE_KEY=your-stripe-key
+STRIPE_SECRET_KEY=your-stripe-secret
 ```
 
-## Бъдещи възможности
+## Admin Setup
 
-- 🗺️ **Карти интеграция** (Google Maps)
-- 💬 **Чат система** между клиенти и шофьори
-- 📍 **GPS локация** и навигация
-- 💳 **Плащания** интеграция
-- 🔔 **Push нотификации**
-- ⭐ **Рейтинг система**
-- 📊 **Админ панел** за управление
+To create an admin account:
 
-## Лиценз
+1. Go to **Firebase Console** → Authentication → Users
+2. Create user with email `admin@roadside-app.com`
+3. Go to **Firestore** → `users` collection
+4. Add document:
+```json
+{
+  "email": "admin@roadside-app.com",
+  "fullName": "System Administrator",
+  "role": "admin",
+  "userType": "admin",
+  "phoneVerified": true,
+  "createdAt": "2026-01-08T00:00:00.000Z"
+}
+```
 
-MIT License - вижте LICENSE файл за детайли.
+## Testing Checklist
 
-## Настройка на Администратор
+All scenarios verified:
+- [x] Happy path - end-to-end flow
+- [x] Payment cancellation restores bids
+- [x] Multi-client race condition handling
+- [x] Order expiration (20-min timer)
+- [x] Driver online/offline toggle
+- [x] Multiple bids from same driver
+- [x] Network failure recovery
+- [x] Firebase SDK bug recovery
 
-За да добавите администраторски акаунт:
+## License
 
-1. **Отидете в Firebase Console** → Authentication → Users
-2. **Добавете нов потребител**:
-   - Email: `admin@roadside-assistance.com`
-   - Password: (изберете сигурна парола)
-3. **Отидете в Firestore** → users колекция
-4. **Добавете документ** с полетата:
-   ```json
-   {
-     "email": "admin@roadside-assistance.com",
-     "fullName": "Системен Администратор",
-     "role": "admin",
-     "userType": "admin",
-     "phoneVerified": true,
-     "createdAt": "2024-01-01T00:00:00.000Z"
-   }
-   ``` 
+MIT License - see LICENSE file for details.
