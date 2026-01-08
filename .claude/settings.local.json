@@ -12,7 +12,10 @@
       "Bash(npx expo install:*)",
       "Bash(npm audit:*)",
       "Bash(cat:*)",
-      "Bash(firebase functions:config:get:*)"
+      "Bash(firebase functions:config:get:*)",
+      "Bash(gh --version:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
     ]
   }
 }
