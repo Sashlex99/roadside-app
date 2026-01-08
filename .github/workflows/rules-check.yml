@@ -1,0 +1,45 @@
+name: Firestore Rules Check
+
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  rules-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Ensure no open rules
+        run: |
+          if grep -E "allow +read, *write: *if +true" firestore.rules; then
+            echo "Rules contain permissive allow true statement. Block PR." && exit 1
+          fi
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+        
+      - name: Validate Firestore rules syntax
+        run: |
+          # Basic syntax validation without requiring Firebase token
+          if firebase emulators:exec --project demo-test --help > /dev/null 2>&1; then
+            echo "✅ Firebase CLI available"
+          else
+            echo "⚠️ Firebase CLI not available, skipping emulator test"
+          fi
+          
+          # Check if rules file exists and has basic structure
+          if [ -f "firestore.rules" ]; then
+            echo "✅ firestore.rules file exists"
+            # Basic syntax check
+            if grep -q "rules_version" firestore.rules && grep -q "service cloud.firestore" firestore.rules; then
+              echo "✅ Basic Firestore rules structure is valid"
+            else
+              echo "❌ Invalid Firestore rules structure" && exit 1
+            fi
+          else
+            echo "❌ firestore.rules file not found" && exit 1
+          fi 

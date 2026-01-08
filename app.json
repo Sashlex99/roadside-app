@@ -1,0 +1,85 @@
+{
+  "expo": {
+    "name": "roadside-assistance",
+    "slug": "roadside-assistance",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "scheme": "roadsideassistance",
+    "developmentClient": {
+      "silentLaunch": true
+    },
+    "updates": {
+      "checkAutomatically": "ON_ERROR_RECOVERY",
+      "fallbackToCacheTimeout": 0
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.roadside.assistance.bg",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Приложението използва вашата локация за да покаже най-близките шофьори.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Приложението използва вашата локация за да покаже най-близките шофьори.",
+        "NSCameraUsageDescription": "Приложението използва камерата за да снимате повредата.",
+        "NSPhotoLibraryUsageDescription": "Приложението има нужда от достъп до галерията за да качите снимки."
+      }
+    },
+    "android": {
+      "package": "com.roadside.assistance.bg",
+      "versionCode": 1,
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "WAKE_LOCK",
+        "FOREGROUND_SERVICE",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0279cba4-55bd-4db9-acad-d0bbc458acfb"
+      },
+      "environment": "development",
+      "projectEnv": "dev",
+      "firebaseApiKey": "${EXPO_PUBLIC_FIREBASE_API_KEY}",
+      "firebaseProjectId": "${EXPO_PUBLIC_FIREBASE_PROJECT_ID}",
+      "firebaseAuthDomain": "${EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN}",
+      "firebaseStorageBucket": "${EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET}",
+      "firebaseMessagingSenderId": "${EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID}",
+      "firebaseAppId": "${EXPO_PUBLIC_FIREBASE_APP_ID}",
+      "stripe": {
+        "publishableKey": "${EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY}"
+      },
+      "smsApiKey": "${SMS_API_KEY}",
+      "smsUsername": "${SMS_USERNAME}",
+      "smsProvider": "${EXPO_PUBLIC_SMS_PROVIDER}",
+      "smsMode": "${EXPO_PUBLIC_SMS_MODE}"
+    },
+    "owner": "sashlex"
+  }
+}

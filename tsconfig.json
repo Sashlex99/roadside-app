@@ -1,0 +1,21 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "module": "esnext",
+    "target": "es2020",
+    "moduleResolution": "bundler"
+  },
+  "include": [
+    "src/**/*",
+    "App.tsx",
+    "index.ts"
+  ],
+  "exclude": [
+    "admin-panel/**/*",
+    "node_modules"
+  ]
+}

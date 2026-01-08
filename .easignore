@@ -1,0 +1,108 @@
+# Git and GitHub
+.git
+.github
+.husky
+
+# IDE and Editor
+.cursor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Expo cache
+.expo
+
+# Admin panel (not needed for mobile app build)
+admin-panel
+
+# Firebase functions (deployed separately)
+functions
+
+# Documentation
+docs
+github_issues
+*.md
+
+# Scripts and test files
+scripts
+test-*.js
+test-*.ts
+*-test.js
+*-test.ts
+run-*.js
+debug-*.js
+simple-*.js
+direct-*.js
+
+# Batch and PowerShell scripts
+*.bat
+*.ps1
+
+# Distribution and build artifacts
+dist
+build
+lib
+web-build
+coverage
+
+# Android build cache
+android/.gradle
+android/.kotlin
+android/build
+android/app/build
+
+# Node modules (EAS installs these)
+node_modules
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+logs
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files (security)
+.env
+.env.*
+*.env
+stripe.env*
+sms.env*
+
+# Firebase
+.firebase
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# Credentials and secrets (keep google-services.json for Android build)
+# google-services.json - REQUIRED for Android Firebase build
+GoogleService-Info.plist
+*.pem
+*.p12
+*.p8
+*.key
+*.jks
+*.mobileprovision
+**/credentials.json
+**/secrets.js
+**/apiKeys.js
+
+# Backup files
+*.backup
+*.bak
+*.orig.*
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Metro health check
+.metro-health-check*
+
+# Debug logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(xargs:*)",
+      "Bash(eas build:*)",
+      "Bash(eas whoami:*)",
+      "WebFetch(domain:expo.dev)",
+      "Bash(eas build:view:*)",
+      "WebFetch(domain:job-logs.eascdn.net)",
+      "Bash(npx expo install:*)",
+      "Bash(npm audit:*)",
+      "Bash(cat:*)",
+      "Bash(firebase functions:config:get:*)"
+    ]
+  }
+}
