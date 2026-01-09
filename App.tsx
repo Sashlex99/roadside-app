@@ -5,11 +5,16 @@ import * as Notifications from 'expo-notifications';
 import * as Linking from 'expo-linking';
 import Constants from 'expo-constants';
 import { doc, updateDoc } from 'firebase/firestore';
+import { StripeProvider } from '@stripe/stripe-react-native';
 import { db } from './src/config/firebase';
 import { AuthProvider } from './src/contexts/AuthContext';
 import MainNavigator from './src/navigation/MainNavigator';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import { safeLogger } from './src/utils/safeLogger';
+
+// Stripe configuration
+const stripePublishableKey = Constants.expoConfig?.extra?.stripe?.publishableKey || '';
+const stripeMerchantIdentifier = 'merchant.com.roadside.assistance.bg';
 
 // Configure notification handler
 Notifications.setNotificationHandler({
@@ -267,11 +272,17 @@ export default function App() {
   }
 
   return (
-    <AuthProvider>
-      <StatusBar style="auto" />
-      <ErrorBoundary>
-        <MainNavigator />
-      </ErrorBoundary>
-    </AuthProvider>
+    <StripeProvider
+      publishableKey={stripePublishableKey}
+      merchantIdentifier={stripeMerchantIdentifier}
+      urlScheme="roadsideassistance"
+    >
+      <AuthProvider>
+        <StatusBar style="auto" />
+        <ErrorBoundary>
+          <MainNavigator />
+        </ErrorBoundary>
+      </AuthProvider>
+    </StripeProvider>
   );
 }

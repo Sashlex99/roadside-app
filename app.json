@@ -8,6 +8,15 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": false,
     "scheme": "roadsideassistance",
+    "plugins": [
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.roadside.assistance.bg",
+          "enableGooglePay": true
+        }
+      ]
+    ],
     "developmentClient": {
       "silentLaunch": true
     },
@@ -24,7 +33,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.roadside.assistance.bg",
       "config": {
-        "usesNonExemptEncryption": false
+        "usesNonExemptEncryption": false,
+        "googleMapsApiKey": "AIzaSyA_95_WMGV4IsaMVOs_aDQD98x-7dL6IAQ"
       },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Приложението използва вашата локация за да покаже най-близките шофьори.",
@@ -37,6 +47,11 @@
       "package": "com.roadside.assistance.bg",
       "versionCode": 1,
       "googleServicesFile": "./google-services.json",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAuDJGJE-nmZYSgZ_a98bXs_LiWFAkWKuY"
+        }
+      },
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

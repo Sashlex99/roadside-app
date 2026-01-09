@@ -198,6 +198,28 @@ Platform takes 15% fee, driver receives rest directly.
 - No duplicate orders created
 - App is production-ready for core flows
 
+### 2026-01-09 (Apple Pay, Google Pay, Google Maps Implementation)
+- **Apple Pay & Google Pay added:**
+  - Stripe plugin configured in `app.json` with merchant ID
+  - `StripeProvider` wrapping app in `App.tsx`
+  - Cloud Function `createPaymentIntent` updated with ephemeralKey + customerId for Payment Sheet
+  - `usePaymentSheet` hook updated with Apple Pay (iOS) and Google Pay (Android) configuration
+  - `useClientPayments` now uses native Payment Sheet instead of browser redirect
+
+- **Google Maps SDK replacing Leaflet:**
+  - `app.json` configured with `GOOGLE_MAPS_API_KEY` for Android and iOS
+  - New `NativeMap` component using `react-native-maps` with Google provider
+  - Clean map style matching original Leaflet appearance
+  - `ClientHomeScreen` and `DriverHomeScreen` updated to use `NativeMap`
+  - `useDriverTracking` hook created for future real-time driver location
+
+- **External setup required before testing:**
+  1. Apple Developer: Create Merchant ID `merchant.com.roadside.assistance.bg`
+  2. Stripe Dashboard: Enable Apple Pay and Google Pay
+  3. Google Cloud Console: Enable Maps SDK, create API key
+  4. EAS Secrets: Add `GOOGLE_MAPS_API_KEY`
+  5. New dev-client build required (native dependencies changed)
+
 ---
 
 *This file tracks context for Claude Code sessions. Update as the project evolves.*

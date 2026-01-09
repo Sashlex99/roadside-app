@@ -37,6 +37,7 @@ interface PaymentIntent {
 /**
  * Creates a Stripe Payment Intent for order payment
  * Amount calculation: bidAmount + platformFee (15%)
+ * Returns data needed for Payment Sheet (Apple Pay / Google Pay)
  */
 export const createPaymentIntent = functions.https.onCall(
   async (data: PaymentIntentData, context) => {
@@ -91,7 +92,7 @@ export const createPaymentIntent = functions.https.onCall(
       const bidAmountInStotinki = bidAmount * 100;
       const platformFeeInStotinki = Math.round(bidAmountInStotinki * (platformFeePercentage / 100));
       const totalAmountInStotinki = bidAmountInStotinki + platformFeeInStotinki;
-      
+
       // Convert back to BGN for display
       const platformFee = platformFeeInStotinki / 100;
       const totalAmount = totalAmountInStotinki / 100;
@@ -103,10 +104,50 @@ export const createPaymentIntent = functions.https.onCall(
         amountInStotinki: totalAmountInStotinki
       });
 
-      // Create Stripe Payment Intent
+      // Get or create Stripe Customer for Payment Sheet
+      const userDoc = await admin.firestore()
+        .collection('users')
+        .doc(clientId)
+        .get();
+
+      const userData = userDoc.data();
+      let customerId = userData?.stripeCustomerId;
+
+      if (!customerId) {
+        // Create new Stripe customer
+        const customer = await stripe.customers.create({
+          email: userData?.email || undefined,
+          name: userData?.fullName || undefined,
+          metadata: {
+            firebaseUid: clientId,
+            source: 'roadside-assistance-app'
+          }
+        });
+        customerId = customer.id;
+
+        // Save customer ID to user profile
+        await admin.firestore()
+          .collection('users')
+          .doc(clientId)
+          .update({
+            stripeCustomerId: customerId,
+            updatedAt: new Date()
+          });
+
+        console.log('👤 Created new Stripe customer:', customerId);
+      }
+
+      // Create ephemeral key for Payment Sheet
+      const ephemeralKey = await stripe.ephemeralKeys.create(
+        { customer: customerId },
+        { apiVersion: '2023-10-16' }
+      );
+
+      // Create Stripe Payment Intent with customer
       const paymentIntent = await stripe.paymentIntents.create({
         amount: totalAmountInStotinki,
         currency: 'eur',
+        customer: customerId,
         automatic_payment_methods: {
           enabled: true,
         },
@@ -132,6 +173,7 @@ export const createPaymentIntent = functions.https.onCall(
           bidId,
           driverId,
           clientId,
+          customerId,
           bidAmount,
           platformFee,
           totalAmount,
@@ -140,8 +182,9 @@ export const createPaymentIntent = functions.https.onCall(
           updatedAt: new Date(),
         });
 
-      console.log('✅ Payment Intent created:', {
+      console.log('✅ Payment Intent created for Payment Sheet:', {
         paymentIntentId: paymentIntent.id,
+        customerId,
         amount: totalAmount,
         orderId
       });
@@ -149,6 +192,8 @@ export const createPaymentIntent = functions.https.onCall(
       return {
         paymentIntentId: paymentIntent.id,
         clientSecret: paymentIntent.client_secret,
+        ephemeralKey: ephemeralKey.secret,
+        customerId,
         amount: totalAmount,
         platformFee,
         bidAmount

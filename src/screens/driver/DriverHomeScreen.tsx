@@ -13,7 +13,7 @@ import { useNavigation } from '@react-navigation/native';
 // New shared components
 import CustomModalComponent from '../../components/shared/CustomModal';
 import Header from '../../components/shared/Header';
-import LeafletMap from '../../components/shared/LeafletMap';
+import NativeMap from '../../components/shared/NativeMap';
 import FAB from '../../components/driver/FAB';
 import DriverActiveOrderPanel from '../../components/driver/ActiveOrderPanel';
 
@@ -204,12 +204,12 @@ export default function DriverHomeScreen() {
         />
       )}
 
-      {/* Map Background */}
-      <LeafletMap 
-        location={location} 
+      {/* Map Background - Google Maps */}
+      <NativeMap
+        location={location}
         style={styles.mapContainer}
         variant="driver"
-        onMapReady={() => console.log('🗺️ Driver map loaded')} 
+        onMapReady={() => console.log('🗺️ Driver map loaded')}
       />
 
       {/* Floating Action Button for Orders */}

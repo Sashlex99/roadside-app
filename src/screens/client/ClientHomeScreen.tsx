@@ -19,7 +19,7 @@ import { checkNetworkConnectivity } from '../../utils/networkUtils';
 // New shared components
 import CustomModalComponent from '../../components/shared/CustomModal';
 import Header from '../../components/shared/Header';
-import LeafletMap from '../../components/shared/LeafletMap';
+import NativeMap from '../../components/shared/NativeMap';
 import RequestButton from '../../components/client/RequestButton';
 import ActiveOrderPanel from '../../components/client/ActiveOrderPanel';
 import RequestModal from '../../components/client/modals/RequestModal';
@@ -311,11 +311,12 @@ export default function ClientHomeScreen() {
         />
       )}
 
-      {/* Map Background */}
-      <LeafletMap 
-        location={location} 
+      {/* Map Background - Google Maps */}
+      <NativeMap
+        location={location}
         style={styles.mapContainer}
-        onMapReady={() => console.log('🗺️ Client map loaded')} 
+        onMapReady={() => console.log('🗺️ Client map loaded')}
+        variant="client"
       />
 
       {/* Request Button */}

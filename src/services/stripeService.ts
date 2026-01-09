@@ -17,6 +17,8 @@ export interface PaymentIntentData {
 export interface PaymentIntentResponse {
   paymentIntentId: string;
   clientSecret: string;
+  ephemeralKey: string;    // For Payment Sheet
+  customerId: string;      // Stripe Customer ID
   amount: number;
   platformFee: number;
   bidAmount: number;

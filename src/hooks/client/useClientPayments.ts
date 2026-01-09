@@ -6,6 +6,7 @@ import { ensureDriverNotification } from '../../utils/driverNotifications';
 import { CustomModal as CustomModalType } from '../../types/shared';
 import { PaymentModal } from '../../types/client';
 import { colors } from '../../constants/colors';
+import { usePaymentSheet } from '../usePaymentSheet';
 
 interface UseClientPaymentsParams {
   user: any;
@@ -31,10 +32,13 @@ export function useClientPayments({
     driverName: '',
     totalAmount: 0
   });
-  
+
   const [acceptingBid, setAcceptingBid] = useState(false);
   const [acceptingBidId, setAcceptingBidId] = useState<string | null>(null);
   const [paymentInProgress, setPaymentInProgress] = useState(false);
+
+  // Payment Sheet hook for Apple Pay / Google Pay / Card
+  const { startPaymentSheet, loading: paymentSheetLoading } = usePaymentSheet();
   
   // ✅ FIXED: Use refs to track all timeout states and prevent memory leaks
   const paymentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -423,19 +427,19 @@ export function useClientPayments({
     return () => subscription?.remove();
   }, []); // ✅ FIX: Empty deps since we use refs for current values
 
-  // Confirm and accept bid function
+  // Confirm and accept bid function - uses Payment Sheet (Apple Pay / Google Pay / Card)
   const confirmAcceptBid = async (bidId: string) => {
     if (!activeOrder) {
       console.error('❌ No active order found');
       return;
     }
-    
+
     const selectedBid = bids.find(bid => bid.id === bidId);
     if (!selectedBid) {
       console.error('❌ Selected bid not found:', bidId);
       return;
     }
-    
+
     if (!user) {
       setCustomModal({
         visible: true,
@@ -454,82 +458,112 @@ export function useClientPayments({
     // Start loading state
     setAcceptingBid(true);
     setAcceptingBidId(bidId);
-    
-    console.log('🔄 Starting bid acceptance process:', {
+
+    console.log('🔄 Starting bid acceptance process with Payment Sheet:', {
       orderId: activeOrder.id,
       bidId,
       proposedPrice: selectedBid.proposedPrice,
       driverName: selectedBid.driverInfo.name
     });
-    
+
     try {
       // 1. Reserve bid в Firestore (Phase 1)
       console.log('📝 Step 1: Reserving bid in Firestore...');
       await reserveBid(activeOrder.id, bidId);
       console.log('✅ Step 1: Bid reserved successfully');
-      
-      // 2. Calculate platform fee (15%)
-      const platformFee = selectedBid.proposedPrice * 0.15;
-      console.log('💰 Step 2: Platform fee calculated:', platformFee);
-      
-      // 3. Create payment link
-      console.log('🔗 Step 3: Creating payment link...');
-      
-      if (!token) {
-        console.log('❌ No token available');
+
+      // 2. Close bids modal before showing payment sheet
+      setShowBidsModal(false);
+
+      // 3. Show Payment Sheet (Apple Pay / Google Pay / Card)
+      console.log('💳 Step 2: Starting Payment Sheet...');
+      const paymentResult = await startPaymentSheet({
+        orderId: activeOrder.id,
+        bidId,
+        bidAmount: selectedBid.proposedPrice,
+        driverId: selectedBid.driverId,
+        clientId: user.uid,
+      });
+
+      if (paymentResult.success) {
+        console.log('✅ Payment completed successfully!');
+
+        // Ensure driver notification
+        ensureDriverNotification(selectedBid.driverId, activeOrder.id).then(result => {
+          if (result.success) {
+            console.log('✅ Driver notification ensured:', result.alreadyNotified ? 'already notified' : 'notification triggered');
+          } else {
+            console.warn('⚠️ Driver notification failed:', result.error);
+          }
+        });
+
+        // Show success modal
         setCustomModal({
           visible: true,
-          title: 'Грешка',
-          message: 'Моля, влезте отново в профила си',
-          icon: 'warning-outline',
-          iconColor: colors.error,
+          title: '✅ Плащането е успешно!',
+          message: 'Поръчката е потвърдена. Шофьорът ще се свърже с вас скоро.',
+          icon: 'checkmark-circle',
+          iconColor: '#10B981',
           buttons: [{
-            text: 'Разбрах',
+            text: 'Отлично!',
             onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
           }]
         });
-        return;
+      } else if (paymentResult.cancelled) {
+        console.log('ℹ️ Payment cancelled by user');
+
+        // Cancel bid reservation
+        await cancelBidReservation(activeOrder.id, bidId);
+
+        // Show cancellation message and reopen bids
+        setCustomModal({
+          visible: true,
+          title: 'Плащането е отменено',
+          message: 'Можете да изберете друга оферта или да опитате отново.',
+          icon: 'close-circle',
+          iconColor: '#FF9500',
+          buttons: [{
+            text: 'Виж офертите',
+            onPress: () => {
+              setCustomModal(prev => ({ ...prev, visible: false }));
+              setTimeout(() => setShowBidsModal(true), 300);
+            }
+          }]
+        });
+      } else {
+        console.error('❌ Payment failed:', paymentResult.errorMessage);
+
+        // Cancel bid reservation on payment failure
+        await cancelBidReservation(activeOrder.id, bidId);
+
+        setCustomModal({
+          visible: true,
+          title: '❌ Грешка при плащане',
+          message: paymentResult.errorMessage || 'Плащането не беше успешно. Моля, опитайте отново.',
+          icon: 'warning-outline',
+          iconColor: colors.error,
+          buttons: [
+            {
+              text: 'Опитай отново',
+              onPress: () => {
+                setCustomModal(prev => ({ ...prev, visible: false }));
+                setTimeout(() => setShowBidsModal(true), 300);
+              }
+            }
+          ]
+        });
       }
-      
-      const paymentData = {
-        orderId: activeOrder.id,
-        amount: platformFee,
-        driverName: selectedBid.driverInfo.name,
-        redirectUrl: 'https://example.com/payment-success'
-      };
-      console.log('📤 Payment link data:', paymentData);
-      
-      const result = await createPaymentLinkWithToken(paymentData, token, user.uid);
-      console.log('✅ Step 3: Payment link created:', result);
-      
-      // 4. Show payment modal
-      console.log('📱 Step 4: Showing payment modal...');
-      console.log('🔍 [PAYMENT MODAL DEBUG] About to show payment modal with:', {
-        visible: true,
-        amount: platformFee,
-        paymentUrl: result.paymentUrl,
-        driverName: selectedBid.driverInfo.name,
-        totalAmount: selectedBid.proposedPrice,
-        currentPaymentInProgress: paymentInProgress
-      });
-      
-      setPaymentModal({
-        visible: true,
-        amount: platformFee,
-        paymentUrl: result.paymentUrl,
-        driverName: selectedBid.driverInfo.name,
-        totalAmount: selectedBid.proposedPrice
-      });
-      
-      console.log('🔍 [PAYMENT MODAL DEBUG] Payment modal state updated, paymentInProgress is still:', paymentInProgress);
-      console.log('🔍 [PAYMENT MODAL DEBUG] Note: paymentInProgress will only be true when user clicks payment button');
-      
-      setShowBidsModal(false);
-      console.log('🎉 Bid acceptance process completed successfully!');
-      
+
     } catch (error: any) {
       console.error('❌ Error in confirmAcceptBid:', error);
-      
+
+      // Cancel bid reservation on error
+      try {
+        await cancelBidReservation(activeOrder.id, bidId);
+      } catch (cancelError) {
+        console.error('Error cancelling bid reservation:', cancelError);
+      }
+
       // More specific error messages
       let errorMessage = 'Не успяхме да обработим офертата';
       if (error?.code === 'unauthenticated') {
@@ -547,7 +581,7 @@ export function useClientPayments({
       } else if (error?.message?.includes('network')) {
         errorMessage = 'Проблем с мрежата. Проверете интернет връзката';
       }
-      
+
       setCustomModal({
         visible: true,
         title: 'Грешка',
@@ -644,8 +678,9 @@ export function useClientPayments({
     acceptingBid,
     acceptingBidId,
     paymentInProgress,
+    paymentSheetLoading,  // For Apple Pay / Google Pay loading state
     confirmAcceptBid,
-    handlePaymentPress,
-    handlePaymentCancel
+    handlePaymentPress,   // Legacy - for Payment Link fallback
+    handlePaymentCancel   // Legacy - for Payment Link fallback
   };
 } 
