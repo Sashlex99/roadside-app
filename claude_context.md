@@ -22,8 +22,8 @@ npx expo start --dev-client --tunnel
 | Framework | React Native + Expo (dev-client) |
 | Navigation | React Navigation (Stack) |
 | Backend | Firebase (Firestore, Auth, Functions, Storage) |
-| Payments | Stripe (15% platform fee) |
-| Maps | Leaflet.js (in WebView) |
+| Payments | Stripe Payment Sheet (Apple Pay, Google Pay, Cards) |
+| Maps | Google Maps SDK (react-native-maps) |
 | Location | expo-location |
 | Notifications | expo-notifications |
 | Language | TypeScript |
@@ -175,13 +175,21 @@ Location and geocoding services use circuit breakers to handle transient failure
 ### Race Condition Prevention
 Driver locking system prevents double-booking when multiple clients try to accept the same driver simultaneously. See `99%productionready.md` for the full implementation plan.
 
-### Payment Flow
+### Payment Flow (Native Payment Sheet)
 ```
-Client accepts bid → Create Stripe Payment Link → Client pays →
-Deep link returns to app → Order status updated to 'accepted'
+Client accepts bid → Bid reserved + Driver locked →
+Payment Sheet opens (Apple Pay / Google Pay / Card) →
+Payment succeeds → processPayment() called →
+Order status = 'accepted', acceptedDriverId set →
+Driver sees active job UI
 ```
 
-Platform takes 15% fee, driver receives rest directly.
+**Currency:** EUR (all payments)
+**Platform fee:** 15% of bid amount
+**Key files:**
+- `src/hooks/usePaymentSheet.ts` - Payment Sheet initialization
+- `src/hooks/client/useClientPayments.ts` - Payment flow orchestration
+- `functions/src/payments.ts` - `createPaymentIntent`, `processPayment`
 
 ## Key Files to Know
 
@@ -268,6 +276,54 @@ cd functions && npm run deploy
   - Solution: `attrib -R /S /D` + custom temp dir (see Known Issues section)
 - **New dev-client APK built** with Apple Pay, Google Pay, and Google Maps SDK
 - Ready for testing on physical device
+
+### 2026-01-12 (Payment Flow Fixed & Functions Cleanup)
+- **Currency fixed from BGN to EUR:**
+  - All payment functions now use `currency: 'eur'`
+  - Stripe account must have EUR enabled (was failing with "bgn not supported")
+  - Deleted all old functions and redeployed fresh
+
+- **Driver UI after payment fixed:**
+  - **Bug:** `processPayment()` set `status: 'paid'` but driver app looked for `status: 'accepted'`
+  - **Bug:** `processPayment()` didn't set `acceptedDriverId`
+  - **Fix:** Now sets `status: 'accepted'` and `acceptedDriverId: driverId`
+  - Driver now sees active job UI immediately after client pays
+
+- **Firebase Functions region consistency:**
+  - All functions now use `europe-west3` (Frankfurt)
+  - Fixed Firestore triggers that were defaulting to `us-central1`:
+    - `onOrderCreate` in `ordersOnCreate.ts`
+    - `onBidCreateNotification` in `notifications.ts`
+    - `onBidAcceptedNotification` in `notifications.ts`
+
+- **Missing exports added to `index.ts`:**
+  - Added `onBidAcceptedNotification` export
+
+- **Payment Sheet working:**
+  - Native Apple Pay / Google Pay integration complete
+  - Uses Stripe Payment Sheet (not browser redirect)
+  - Warning `No task registered for key StripeKeepJsAwakeTask` is harmless (can ignore)
+
+## Setup for New Machine
+
+**Files needed (not in git):**
+| File | Purpose | How to Get |
+|------|---------|------------|
+| `google-services.json` | Firebase Android config | Firebase Console → Project Settings → Android app |
+| `functions/.runtimeconfig.json` | Cloud Functions secrets | `firebase functions:config:get > .runtimeconfig.json` |
+| `.env` | Firebase API key | Copy from existing machine or create with `EXPO_PUBLIC_FIREBASE_API_KEY=...` |
+
+**Quick setup:**
+```bash
+git clone https://github.com/Sashlex99/roadside-app.git
+cd roadside-app
+npm install
+cd functions && npm install
+firebase functions:config:get > .runtimeconfig.json
+cd ..
+# Copy google-services.json and .env from existing machine
+npx expo start --dev-client --tunnel
+```
 
 ---
 
