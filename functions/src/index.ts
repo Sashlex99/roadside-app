@@ -17,8 +17,8 @@
 
 export { onOrderCreate } from './ordersOnCreate';
 
-// Push notification functions  
-export { onBidCreateNotification, sendTestNotification } from './notifications';
+// Push notification functions
+export { onBidCreateNotification, onBidAcceptedNotification, sendTestNotification } from './notifications';
 
 // Payment functions
 export { createPaymentIntent, processPayment, handleStripeWebhook, createPaymentLink } from './payments';

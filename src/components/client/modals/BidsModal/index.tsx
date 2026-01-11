@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import {
   View,
   StyleSheet,
@@ -133,7 +133,7 @@ export default function BidsModal({
                         { fontSize: 20, color: '#059669', fontWeight: '700' },
                         isDisabled && styles.disabledText
                       ]}>
-                        {bid.proposedPrice || 'Няма цена'} лв
+                        {bid.proposedPrice || 'Няма цена'} EUR
                       </Text>
                     </View>
                     

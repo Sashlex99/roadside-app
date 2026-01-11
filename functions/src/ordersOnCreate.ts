@@ -26,7 +26,9 @@ interface DriverLocationDoc {
   timestamp: FirebaseFirestore.Timestamp;
 }
 
-export const onOrderCreate = functions.firestore
+export const onOrderCreate = functions
+  .region('europe-west3')
+  .firestore
   .document('orders/{orderId}')
   .onCreate(async (snap: admin.firestore.DocumentSnapshot, context: functions.EventContext) => {
     const orderId = context.params.orderId as string;

@@ -1,4 +1,4 @@
-// Bid Operations Module
+﻿// Bid Operations Module
 // Split from firestore.ts for better maintainability
 
 import { 
@@ -730,7 +730,7 @@ const restoreAllDriverBidsAfterCancellation = async (driverId: string): Promise<
           const twoHours = 2 * 60 * 60 * 1000;
           
           if (bidCreatedAt && (now.getTime() - bidCreatedAt.getTime()) < twoHours) {
-            console.log(`🔄 [ATOMIC FIX] Restoring bid ${bidDoc.id} (${bidData.proposedPrice} лв) for order ${bidOrderId}`);
+            console.log(`🔄 [ATOMIC FIX] Restoring bid ${bidDoc.id} (${bidData.proposedPrice} EUR) for order ${bidOrderId}`);
             
             // Restore bid to active status
             batch.update(bidDoc.ref, {
@@ -832,7 +832,7 @@ const restoreDriverBidsAfterCancellation = async (driverId: string, cancelledOrd
       const twoHours = 2 * 60 * 60 * 1000;
       
       if (bidCreatedAt && (now.getTime() - bidCreatedAt.getTime()) < twoHours) {
-        console.log(`🔄 [FIRESTORE] Restoring bid ${bidDoc.id} (${bidData.proposedPrice} лв) for order ${cancelledOrderId}`);
+        console.log(`🔄 [FIRESTORE] Restoring bid ${bidDoc.id} (${bidData.proposedPrice} EUR) for order ${cancelledOrderId}`);
         
         // Restore bid to active status
         batch.update(bidDoc.ref, {
@@ -969,3 +969,4 @@ export const subscribeToBidsForOrder = (orderId: string, callback: (bids: Bid[])
     }
   };
 }; 
+

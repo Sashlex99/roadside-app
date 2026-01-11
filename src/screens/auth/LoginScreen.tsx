@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -57,19 +57,19 @@ export default function LoginScreen({ navigation }: Props) {
         AsyncStorage.getItem('savedCredentials'),
         AsyncStorage.getItem('rememberMe')
       ]);
-      
+
       if (savedCredentials && savedRememberMe === 'true') {
         const { email: savedEmail, password: savedPassword } = JSON.parse(savedCredentials);
-        console.log('dY"? [LoginScreen] Found saved credentials for:', savedEmail);
-        
+        console.log('[LoginScreen] Found saved credentials for:', savedEmail);
+
         setEmail(savedEmail);
         setPassword(savedPassword);
         setRememberMe(true);
-        
+
         // Attempt auto-login if credentials are saved
-        console.log('dYs? [LoginScreen] Attempting auto-login...');
+        console.log('[LoginScreen] Attempting auto-login...');
         setAutoLoginAttempted(true);
-        
+
         try {
           setLoading(true);
           const user = await login(savedEmail, savedPassword);
@@ -86,7 +86,7 @@ export default function LoginScreen({ navigation }: Props) {
           setLoading(false);
         }
       } else {
-        console.log('dY"? [LoginScreen] No saved credentials found');
+        console.log('[LoginScreen] No saved credentials found');
         setAutoLoginAttempted(true);
       }
     } catch (error) {
@@ -102,89 +102,89 @@ export default function LoginScreen({ navigation }: Props) {
       if (rememberMe) {
         // Save credentials in background (non-blocking)
         AsyncStorage.setItem('savedCredentials', JSON.stringify({ email, password })).catch(error => {
-          console.error('âŒ [LoginScreen] Error saving credentials:', error);
+          console.error('[LoginScreen] Error saving credentials:', error);
         });
         AsyncStorage.setItem('rememberMe', 'true').catch(error => {
-          console.error('âŒ [LoginScreen] Error saving remember me:', error);
+          console.error('[LoginScreen] Error saving remember me:', error);
         });
-        console.log('ðŸ’¾ [LoginScreen] Credentials saved for future auto-login');
+        console.log('[LoginScreen] Credentials saved for future auto-login');
       } else {
         // Clear credentials in background (non-blocking)
         AsyncStorage.removeItem('savedCredentials').catch(error => {
-          console.error('âŒ [LoginScreen] Error clearing credentials:', error);
+          console.error('[LoginScreen] Error clearing credentials:', error);
         });
         AsyncStorage.setItem('rememberMe', 'false').catch(error => {
-          console.error('âŒ [LoginScreen] Error saving remember me:', error);
+          console.error('[LoginScreen] Error saving remember me:', error);
         });
-        console.log('ðŸ—‘ï¸ [LoginScreen] Credentials cleared (remember me disabled)');
+        console.log('[LoginScreen] Credentials cleared (remember me disabled)');
       }
     } catch (error) {
-      console.error('âŒ [LoginScreen] Error in saveCredentials:', error);
+      console.error('[LoginScreen] Error in saveCredentials:', error);
     }
   };
 
   const handleLogin = async () => {
     if (!email || !password) {
-      showAlert('Ð“Ñ€ÐµÑˆÐºÐ°', 'ÐœÐ¾Ð»Ñ, Ð¿Ð¾Ð¿ÑŠÐ»Ð½ÐµÑ‚Ðµ Ð²ÑÐ¸Ñ‡ÐºÐ¸ Ð¿Ð¾Ð»ÐµÑ‚Ð°', 'error');
+      showAlert('Грешка', 'Моля, попълнете всички полета', 'error');
       return;
     }
-  
+
     setLoading(true);
-  
+
     try {
       const user = await login(email, password);
-      
+
       // Check driver status AFTER successful login
       // For non-approved drivers, we need to logout immediately
       if (user.userType === 'driver' && user.verificationStatus !== 'approved') {
         // Logout the user since they shouldn't have access
         await logout();
-        
+
         if (user.verificationStatus === 'pending') {
           showAlert(
-            'Ð§Ð°ÐºÐ° Ð¾Ð´Ð¾Ð±Ñ€ÐµÐ½Ð¸Ðµ', 
-            'Ð’Ð°ÑˆÐ°Ñ‚Ð° Ñ€ÐµÐ³Ð¸ÑÑ‚Ñ€Ð°Ñ†Ð¸Ñ Ðµ Ð¿Ð¾Ð»ÑƒÑ‡ÐµÐ½Ð° Ð¸ ÑÐµ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÑÐ²Ð° Ð¾Ñ‚ Ð°Ð´Ð¼Ð¸Ð½Ð¸ÑÑ‚Ñ€Ð°Ñ‚Ð¾Ñ€. Ð©Ðµ Ð¿Ð¾Ð»ÑƒÑ‡Ð¸Ñ‚Ðµ Ð¸Ð·Ð²ÐµÑÑ‚Ð¸Ðµ ÐºÐ¾Ð³Ð°Ñ‚Ð¾ Ð±ÑŠÐ´Ðµ Ð¾Ð´Ð¾Ð±Ñ€ÐµÐ½.',
+            'Чака одобрение',
+            'Вашата регистрация е получена и се проверява от администратор. Ще получите известие когато бъде одобрена.',
             'info'
           );
         } else if (user.verificationStatus === 'rejected') {
           showAlert(
-            'Ð ÐµÐ³Ð¸ÑÑ‚Ñ€Ð°Ñ†Ð¸ÑÑ‚Ð° Ðµ Ð¾Ñ‚Ñ…Ð²ÑŠÑ€Ð»ÐµÐ½Ð°', 
-            'Ð’Ð°ÑˆÐ°Ñ‚Ð° Ñ€ÐµÐ³Ð¸ÑÑ‚Ñ€Ð°Ñ†Ð¸Ñ Ðµ Ð¾Ñ‚Ñ…Ð²ÑŠÑ€Ð»ÐµÐ½Ð°. ÐœÐ¾Ð»Ñ, ÑÐ²ÑŠÑ€Ð¶ÐµÑ‚Ðµ ÑÐµ Ñ Ð¿Ð¾Ð´Ð´Ñ€ÑŠÐ¶ÐºÐ°Ñ‚Ð° Ð·Ð° Ð¿Ð¾Ð²ÐµÑ‡Ðµ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸Ñ.',
+            'Регистрацията е отхвърлена',
+            'Вашата регистрация е отхвърлена. Моля, свържете се с поддръжката за повече информация.',
             'error'
           );
         }
         setLoading(false);
         return;
       }
-      
-      // âœ… Save credentials if remember me is enabled
+
+      // Save credentials if remember me is enabled
       await saveCredentials(email, password);
-      
-      console.log('âœ… [LoginScreen] Manual login successful:', user.uid);
-      console.log('âœ… [LoginScreen] User details:', { 
-        uid: user.uid, 
-        userType: user.userType, 
-        verificationStatus: user.verificationStatus 
+
+      console.log('[LoginScreen] Manual login successful:', user.uid);
+      console.log('[LoginScreen] User details:', {
+        uid: user.uid,
+        userType: user.userType,
+        verificationStatus: user.verificationStatus
       });
       // Login successful - navigation will be handled automatically by AuthContext
       // The user state has been updated, so MainNavigator will show the appropriate screen
-      
+
     } catch (error: any) {
-      let message = 'Ð“Ñ€ÐµÑˆÐµÐ½ Ð¸Ð¼ÐµÐ¹Ð» Ð¸Ð»Ð¸ Ð¿Ð°Ñ€Ð¾Ð»Ð°';
-      
+      let message = 'Грешен имейл или парола';
+
       if (error.message === 'EMAIL_NOT_FOUND') {
-        message = 'ÐÐµ ÑÑŠÑ‰ÐµÑÑ‚Ð²ÑƒÐ²Ð° Ð¿Ð¾Ñ‚Ñ€ÐµÐ±Ð¸Ñ‚ÐµÐ» Ñ Ñ‚Ð¾Ð·Ð¸ Ð¸Ð¼ÐµÐ¹Ð»';
+        message = 'Не съществува потребител с този имейл';
       } else if (error.message === 'INVALID_PASSWORD') {
-        message = 'Ð“Ñ€ÐµÑˆÐ½Ð° Ð¿Ð°Ñ€Ð¾Ð»Ð°';
+        message = 'Грешна парола';
       } else if (error.message === 'INVALID_EMAIL') {
-        message = 'ÐÐµÐ²Ð°Ð»Ð¸Ð´ÐµÐ½ Ð¸Ð¼ÐµÐ¹Ð» Ð°Ð´Ñ€ÐµÑ';
+        message = 'Невалиден имейл адрес';
       } else if (error.message === 'USER_DELETED') {
-        message = 'Ð¢Ð¾Ð·Ð¸ Ð°ÐºÐ°ÑƒÐ½Ñ‚ Ðµ Ð¸Ð·Ñ‚Ñ€Ð¸Ñ‚ Ð¾Ñ‚ ÑÐ¸ÑÑ‚ÐµÐ¼Ð°Ñ‚Ð°. Ð—Ð° Ð²ÑŠÐ¿Ñ€Ð¾ÑÐ¸ ÑÐµ ÑÐ²ÑŠÑ€Ð¶ÐµÑ‚Ðµ Ñ Ð¿Ð¾Ð´Ð´Ñ€ÑŠÐ¶ÐºÐ°Ñ‚Ð°.';
+        message = 'Този акаунт е изтрит от системата. За въпроси се свържете с поддръжката.';
       } else if (error.message === 'USER_BANNED') {
-        message = 'Ð’Ð°ÑˆÐ¸ÑÑ‚ Ð°ÐºÐ°ÑƒÐ½Ñ‚ Ðµ Ð±Ð»Ð¾ÐºÐ¸Ñ€Ð°Ð½. Ð—Ð° Ð¿Ð¾Ð²ÐµÑ‡Ðµ Ð¸Ð½Ñ„Ð¾Ñ€Ð¼Ð°Ñ†Ð¸Ñ ÑÐµ ÑÐ²ÑŠÑ€Ð¶ÐµÑ‚Ðµ Ñ Ð¿Ð¾Ð´Ð´Ñ€ÑŠÐ¶ÐºÐ°Ñ‚Ð°.';
+        message = 'Вашият акаунт е блокиран. За повече информация се свържете с поддръжката.';
       }
-      
-      showAlert('Ð“Ñ€ÐµÑˆÐºÐ°', message, 'error');
+
+      showAlert('Грешка', message, 'error');
       setLoading(false);
     }
   };
@@ -192,12 +192,12 @@ export default function LoginScreen({ navigation }: Props) {
   return (
     <>
       <View style={styles.container}>
-        <Text style={styles.title}>Ð”Ð¾Ð±Ñ€Ðµ Ð´Ð¾ÑˆÐ»Ð¸!</Text>
-        <Text style={styles.subtitle}>Ð’Ð»ÐµÐ·Ñ‚Ðµ Ð² Ð¿Ñ€Ð¾Ñ„Ð¸Ð»Ð° ÑÐ¸</Text>
+        <Text style={styles.title}>Добре дошли!</Text>
+        <Text style={styles.subtitle}>Влезте в профила си</Text>
 
         <TextInput
           style={styles.input}
-          placeholder="Ð˜Ð¼ÐµÐ¹Ð»"
+          placeholder="Имейл"
           placeholderTextColor={colors.placeholder}
           value={email}
           onChangeText={setEmail}
@@ -209,7 +209,7 @@ export default function LoginScreen({ navigation }: Props) {
 
         <TextInput
           style={styles.input}
-          placeholder="ÐŸÐ°Ñ€Ð¾Ð»Ð°"
+          placeholder="Парола"
           placeholderTextColor={colors.placeholder}
           value={password}
           onChangeText={setPassword}
@@ -219,7 +219,7 @@ export default function LoginScreen({ navigation }: Props) {
         />
 
         {/* Remember Me Checkbox */}
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.rememberMeContainer}
           onPress={() => setRememberMe(!rememberMe)}
           activeOpacity={0.7}
@@ -229,11 +229,11 @@ export default function LoginScreen({ navigation }: Props) {
               <Ionicons name="checkmark" size={16} color={colors.textOnPrimary} />
             )}
           </View>
-          <Text style={styles.rememberMeText}>Ð—Ð°Ð¿Ð¾Ð¼Ð½Ð¸ Ð¼Ðµ</Text>
+          <Text style={styles.rememberMeText}>Запомни ме</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={[styles.button, loading && styles.buttonDisabled]} 
+        <TouchableOpacity
+          style={[styles.button, loading && styles.buttonDisabled]}
           onPress={handleLogin}
           disabled={loading || !autoLoginAttempted}
         >
@@ -241,21 +241,21 @@ export default function LoginScreen({ navigation }: Props) {
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <ActivityIndicator color={colors.textOnPrimary} size="small" />
               <Text style={[styles.buttonText, { marginLeft: 8, fontSize: 14 }]}>
-                {!autoLoginAttempted ? 'Ð’Ð»Ð¸Ð·Ð°Ð¼ Ð°Ð²Ñ‚Ð¾Ð¼Ð°Ñ‚Ð¸Ñ‡Ð½Ð¾...' : 'Ð’Ð»Ð¸Ð·Ð°Ð¼...'}
+                {!autoLoginAttempted ? 'Влизам автоматично...' : 'Влизам...'}
               </Text>
             </View>
           ) : (
-            <Text style={styles.buttonText}>Ð’Ñ…Ð¾Ð´</Text>
+            <Text style={styles.buttonText}>Вход</Text>
           )}
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.linkButton}>
-          <Text style={styles.linkText}>ÐÑÐ¼Ð°Ñ‚Ðµ Ð¿Ñ€Ð¾Ñ„Ð¸Ð»?</Text>
-          <TouchableOpacity 
+          <Text style={styles.linkText}>Нямате профил?</Text>
+          <TouchableOpacity
             style={styles.registerButton}
             onPress={() => navigation.navigate('Register')}
           >
-            <Text style={styles.registerButtonText}>Ð ÐµÐ³Ð¸ÑÑ‚Ñ€Ð¸Ñ€Ð°Ð¹Ñ‚Ðµ ÑÐµ</Text>
+            <Text style={styles.registerButtonText}>Регистрирайте се</Text>
           </TouchableOpacity>
         </TouchableOpacity>
       </View>
@@ -365,7 +365,3 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
 });
-
-
-
-

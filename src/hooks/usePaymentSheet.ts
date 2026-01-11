@@ -58,6 +58,7 @@ export function usePaymentSheet() {
         // Google Pay configuration (Android only)
         googlePay: Platform.OS === 'android' ? {
           merchantCountryCode: 'BG',
+          currencyCode: 'EUR',
           testEnv: __DEV__,
         } : undefined,
         defaultBillingDetails: {},

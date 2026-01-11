@@ -75,7 +75,7 @@ function firestoreFieldsToObject(fields: any): any {
 /**
  * HTTP Cloud Function for creating payment links with custom authentication
  */
-export const createPaymentLinkHTTP = functions.https.onRequest(async (req, res) => {
+export const createPaymentLinkHTTP = functions.region('europe-west3').https.onRequest(async (req, res) => {
   // Set CORS headers
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -211,7 +211,7 @@ export const createPaymentLinkHTTP = functions.https.onRequest(async (req, res) 
 /**
  * NEW HTTP Cloud Function for creating payment links - Testing Version
  */
-export const createPaymentLinkTest = functions.https.onRequest(async (req, res) => {
+export const createPaymentLinkTest = functions.region('europe-west3').https.onRequest(async (req, res) => {
   // Set CORS headers
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -340,7 +340,7 @@ export const createPaymentLinkTest = functions.https.onRequest(async (req, res) 
 /**
  * Webhook handler for Stripe payment link events
  */
-export const handlePaymentLinkWebhook = functions.https.onRequest(async (req, res) => {
+export const handlePaymentLinkWebhook = functions.region('europe-west3').https.onRequest(async (req, res) => {
   const sig = req.headers['stripe-signature'] as string;
   const webhookSecret = functions.config().stripe?.webhook_secret || process.env.STRIPE_WEBHOOK_SECRET;
 

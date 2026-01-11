@@ -1,9 +1,9 @@
-import { httpsCallable, getFunctions } from 'firebase/functions';
+﻿import { httpsCallable, getFunctions } from 'firebase/functions';
 import { auth } from '../config/firebase';
 import Constants from 'expo-constants';
 
-// Get functions instance with correct region
-const functions = getFunctions(auth.app, 'us-central1');
+// Get functions instance with correct region (must match Firebase deployment region)
+const functions = getFunctions(auth.app, 'europe-west3');
 
 // Types for payment data
 export interface PaymentIntentData {
@@ -132,10 +132,10 @@ export function calculatePaymentAmounts(bidAmount: number, feePercentage: number
 /**
  * Formats amount for display
  * @param amount Amount in BGN
- * @returns Formatted string (e.g., "50.00 лв")
+ * @returns Formatted string (e.g., "50.00 EUR")
  */
 export function formatAmount(amount: number): string {
-  return `${amount.toFixed(2)} лв`;
+  return `${amount.toFixed(2)} EUR`;
 }
 
 /**

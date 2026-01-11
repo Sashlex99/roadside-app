@@ -1,4 +1,4 @@
-// ✅ CRITICAL FIX: Bid Restoration After Payment Cancellation
+﻿// ✅ CRITICAL FIX: Bid Restoration After Payment Cancellation
 // This addresses the issue where bids don't reappear after payment cancellation
 
 import { 
@@ -192,7 +192,7 @@ export const diagnoseBidVisibility = async (orderId: string, clientName: string 
     
     // Show details for each bid
     allBids.forEach(bid => {
-      console.log(`   Bid ${bid.id}: ${bid.proposedPrice} лв - Status: ${bid.status} - Driver: ${bid.driverId}`);
+      console.log(`   Bid ${bid.id}: ${bid.proposedPrice} EUR - Status: ${bid.status} - Driver: ${bid.driverId}`);
     });
     
     // Check if any bids should be visible but aren't

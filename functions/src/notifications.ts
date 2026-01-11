@@ -149,7 +149,9 @@ function calculateDistance(
 /**
  * При създаване на нова поръчка - нотифицира близки шофьори
  */
-export const onOrderCreateNotification = functions.firestore
+export const onOrderCreateNotification = functions
+  .region('europe-west3')
+  .firestore
   .document('orders/{orderId}')
   .onCreate(async (snap: admin.firestore.DocumentSnapshot, context: functions.EventContext) => {
     const order = snap.data();
@@ -285,7 +287,9 @@ export const onOrderCreateNotification = functions.firestore
 /**
  * При създаване на нова оферта - нотифицира клиента
  */
-export const onBidCreateNotification = functions.firestore
+export const onBidCreateNotification = functions
+  .region('europe-west3')
+  .firestore
   .document('orders/{orderId}/bids/{bidId}')
   .onCreate(async (snap: admin.firestore.DocumentSnapshot, context: functions.EventContext) => {
     const bid = snap.data();
@@ -351,7 +355,9 @@ export const onBidCreateNotification = functions.firestore
   });
 
 // При приемане на оферта - нотифицира шофьора
-exports.onBidAcceptedNotification = functions.firestore
+export const onBidAcceptedNotification = functions
+  .region('europe-west3')
+  .firestore
   .document('orders/{orderId}')
   .onUpdate(async (change: any, context: any) => {
     const before = change.before.data();
@@ -409,7 +415,7 @@ exports.onBidAcceptedNotification = functions.firestore
   });
 
 // Test function за изпращане на push notifications
-export const sendTestNotification = functions.https.onCall(async (data, context) => {
+export const sendTestNotification = functions.region('europe-west3').https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }

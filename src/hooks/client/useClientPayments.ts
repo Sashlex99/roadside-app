@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { Linking, AppState } from 'react-native';
 import { reserveBid, confirmBid, cancelBidReservation, updateOrderStatus } from '../../services/firestore';
 import { createPaymentLinkWithToken } from '../../services/customStripeService';
@@ -190,7 +190,7 @@ export function useClientPayments({
           visible: true,
           title: '✅ Плащането е успешно!',
           message: amount
-            ? `Платихте ${parseFloat(amount).toFixed(2)} лв платформена такса. Шофьорът ще се свърже с вас скоро.`
+            ? `Платихте ${parseFloat(amount).toFixed(2)} EUR платформена такса. Шофьорът ще се свърже с вас скоро.`
             : 'Поръчката е потвърдена. Шофьорът ще се свърже с вас скоро.',
           icon: 'checkmark-circle',
           iconColor: '#10B981',

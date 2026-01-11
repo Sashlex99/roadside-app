@@ -3,118 +3,97 @@ import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
 
 // Initialize Stripe with secret key
-const stripe = new Stripe(
-  functions.config().stripe?.secret_key || process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder'
-);
+const stripeSecretKey = functions.config().stripe?.secret_key || process.env.STRIPE_SECRET_KEY;
+
+if (!stripeSecretKey) {
+  console.error('❌ STRIPE SECRET KEY NOT CONFIGURED!');
+}
+
+const stripe = new Stripe(stripeSecretKey || 'sk_test_placeholder');
 
 // Initialize admin if not already initialized
 if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-// TypeScript interfaces
-interface PaymentIntentData {
-  orderId: string;
-  bidId: string;
-  bidAmount: number; // Amount in BGN (whole numbers, e.g., 50 for 50 лв)
-  driverId: string;
-  clientId: string;
-}
-
-interface PaymentProcessData {
-  paymentIntentId: string;
-  orderId: string;
-  bidId: string;
-}
-
-interface PaymentIntent {
-  id: string;
-  client_secret: string;
-  amount: number;
-  status: string;
-}
+const db = admin.firestore();
 
 /**
- * Creates a Stripe Payment Intent for order payment
- * Amount calculation: bidAmount + platformFee (15%)
+ * Creates a Stripe Payment Intent for platform fee payment (15% of bid)
  * Returns data needed for Payment Sheet (Apple Pay / Google Pay)
  */
-export const createPaymentIntent = functions.https.onCall(
-  async (data: PaymentIntentData, context) => {
+export const createPaymentIntent = functions
+  .region('europe-west3')
+  .https.onCall(async (data, context) => {
+    console.log('🚀 createPaymentIntent called with:', JSON.stringify(data));
+
     // Verify authentication
     if (!context.auth) {
-      throw new functions.https.HttpsError(
-        'unauthenticated',
-        'User must be authenticated to create payment intent'
-      );
+      console.error('❌ User not authenticated');
+      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
     }
 
     const { orderId, bidId, bidAmount, driverId, clientId } = data;
 
-    try {
-      // Validate input data
-      if (!orderId || !bidId || !bidAmount || !driverId || !clientId) {
-        throw new functions.https.HttpsError(
-          'invalid-argument',
-          'Missing required payment data'
-        );
-      }
+    // Validate input
+    if (!orderId || !bidId || !bidAmount || !driverId || !clientId) {
+      console.error('❌ Missing required fields:', { orderId, bidId, bidAmount, driverId, clientId });
+      throw new functions.https.HttpsError('invalid-argument', 'Missing required payment data');
+    }
 
-      // Verify the user is the client for this order
-      const orderDoc = await admin.firestore()
-        .collection('orders')
-        .doc(orderId)
-        .get();
+    try {
+      // 1. Verify order exists and belongs to this client
+      console.log('📋 Step 1: Verifying order...');
+      const orderDoc = await db.collection('orders').doc(orderId).get();
+
+      if (!orderDoc.exists) {
+        console.error('❌ Order not found:', orderId);
+        throw new functions.https.HttpsError('not-found', 'Order not found');
+      }
 
       const order = orderDoc.data();
-      if (!order || order.clientId !== context.auth.uid) {
-        throw new functions.https.HttpsError(
-          'permission-denied',
-          'User not authorized for this order'
-        );
+      if (order?.clientId !== context.auth.uid) {
+        console.error('❌ User not authorized for order:', { orderClientId: order?.clientId, authUid: context.auth.uid });
+        throw new functions.https.HttpsError('permission-denied', 'User not authorized for this order');
       }
+      console.log('✅ Order verified');
 
-      // Verify the bid exists (bids are stored in top-level 'bids' collection)
-      const bidDoc = await admin.firestore()
-        .collection('bids')
-        .doc(bidId)
-        .get();
+      // 2. Verify bid exists
+      console.log('📋 Step 2: Verifying bid...');
+      const bidDoc = await db.collection('bids').doc(bidId).get();
 
       if (!bidDoc.exists) {
-        throw new functions.https.HttpsError(
-          'not-found',
-          'Bid not found'
-        );
+        console.error('❌ Bid not found:', bidId);
+        throw new functions.https.HttpsError('not-found', 'Bid not found');
       }
+      console.log('✅ Bid verified');
 
-      // Calculate amounts (convert BGN to stotinki for Stripe)
-      const platformFeePercentage = 15; // 15%
-      const bidAmountInStotinki = bidAmount * 100;
-      const platformFeeInStotinki = Math.round(bidAmountInStotinki * (platformFeePercentage / 100));
-      const totalAmountInStotinki = bidAmountInStotinki + platformFeeInStotinki;
+      // 3. Calculate platform fee (15% of bid amount)
+      console.log('📋 Step 3: Calculating amount...');
+      const platformFeePercent = 15;
+      const platformFeeAmount = Math.round(bidAmount * (platformFeePercent / 100) * 100); // Convert to cents
 
-      // Convert back to BGN for display
-      const platformFee = platformFeeInStotinki / 100;
-      const totalAmount = totalAmountInStotinki / 100;
-
-      console.log('💰 Payment calculation:', {
+      console.log('💰 Amount calculation:', {
         bidAmount,
-        platformFee,
-        totalAmount,
-        amountInStotinki: totalAmountInStotinki
+        platformFeePercent,
+        platformFeeAmountCents: platformFeeAmount,
+        platformFeeEUR: platformFeeAmount / 100
       });
 
-      // Get or create Stripe Customer for Payment Sheet
-      const userDoc = await admin.firestore()
-        .collection('users')
-        .doc(clientId)
-        .get();
+      // Minimum amount check (Stripe requires at least 50 cents for EUR)
+      if (platformFeeAmount < 50) {
+        console.error('❌ Amount too low:', platformFeeAmount);
+        throw new functions.https.HttpsError('invalid-argument', 'Payment amount too low (minimum 0.50 EUR)');
+      }
 
+      // 4. Get or create Stripe customer
+      console.log('📋 Step 4: Getting/creating Stripe customer...');
+      const userDoc = await db.collection('users').doc(clientId).get();
       const userData = userDoc.data();
       let customerId = userData?.stripeCustomerId;
 
       if (!customerId) {
-        // Create new Stripe customer
+        console.log('👤 Creating new Stripe customer...');
         const customer = await stripe.customers.create({
           email: userData?.email || undefined,
           name: userData?.fullName || undefined,
@@ -125,27 +104,28 @@ export const createPaymentIntent = functions.https.onCall(
         });
         customerId = customer.id;
 
-        // Save customer ID to user profile
-        await admin.firestore()
-          .collection('users')
-          .doc(clientId)
-          .update({
-            stripeCustomerId: customerId,
-            updatedAt: new Date()
-          });
-
-        console.log('👤 Created new Stripe customer:', customerId);
+        // Save customer ID
+        await db.collection('users').doc(clientId).update({
+          stripeCustomerId: customerId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log('✅ Stripe customer created:', customerId);
+      } else {
+        console.log('✅ Using existing Stripe customer:', customerId);
       }
 
-      // Create ephemeral key for Payment Sheet
+      // 5. Create ephemeral key for Payment Sheet
+      console.log('📋 Step 5: Creating ephemeral key...');
       const ephemeralKey = await stripe.ephemeralKeys.create(
         { customer: customerId },
         { apiVersion: '2023-10-16' }
       );
+      console.log('✅ Ephemeral key created');
 
-      // Create Stripe Payment Intent with customer
+      // 6. Create Payment Intent
+      console.log('📋 Step 6: Creating Payment Intent...');
       const paymentIntent = await stripe.paymentIntents.create({
-        amount: totalAmountInStotinki,
+        amount: platformFeeAmount,
         currency: 'eur',
         customer: customerId,
         automatic_payment_methods: {
@@ -157,86 +137,90 @@ export const createPaymentIntent = functions.https.onCall(
           driverId,
           clientId,
           bidAmount: bidAmount.toString(),
-          platformFee: platformFee.toString(),
+          platformFee: (platformFeeAmount / 100).toString(),
           source: 'roadside-assistance-app'
         },
-        description: `Пътна помощ - Поръчка ${orderId}`,
+        description: `Platform fee - Order ${orderId}`,
       });
+      console.log('✅ Payment Intent created:', paymentIntent.id);
 
-      // Save payment intent to Firestore
-      await admin.firestore()
-        .collection('payments')
-        .doc(paymentIntent.id)
-        .set({
-          paymentIntentId: paymentIntent.id,
-          orderId,
-          bidId,
-          driverId,
-          clientId,
-          customerId,
-          bidAmount,
-          platformFee,
-          totalAmount,
-          status: 'created',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-
-      console.log('✅ Payment Intent created for Payment Sheet:', {
+      // 7. Save payment record
+      console.log('📋 Step 7: Saving payment record...');
+      await db.collection('payments').doc(paymentIntent.id).set({
         paymentIntentId: paymentIntent.id,
+        orderId,
+        bidId,
+        driverId,
+        clientId,
         customerId,
-        amount: totalAmount,
-        orderId
+        bidAmount,
+        platformFee: platformFeeAmount / 100,
+        totalAmount: platformFeeAmount / 100,
+        currency: 'eur',
+        status: 'created',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+      console.log('✅ Payment record saved');
 
-      return {
+      // Return response
+      const response = {
         paymentIntentId: paymentIntent.id,
         clientSecret: paymentIntent.client_secret,
         ephemeralKey: ephemeralKey.secret,
         customerId,
-        amount: totalAmount,
-        platformFee,
+        amount: platformFeeAmount / 100,
+        platformFee: platformFeeAmount / 100,
         bidAmount
       };
 
-    } catch (error) {
-      console.error('❌ Error creating payment intent:', error);
+      console.log('🎉 createPaymentIntent SUCCESS:', {
+        paymentIntentId: response.paymentIntentId,
+        amount: response.amount
+      });
+
+      return response;
+
+    } catch (error: any) {
+      console.error('❌ createPaymentIntent ERROR:', {
+        message: error.message,
+        code: error.code,
+        type: error.type,
+      });
+
       if (error instanceof functions.https.HttpsError) {
         throw error;
       }
-      throw new functions.https.HttpsError(
-        'internal',
-        'Failed to create payment intent'
-      );
+
+      if (error.type === 'StripeInvalidRequestError') {
+        console.error('❌ Stripe Invalid Request:', error.message);
+        throw new functions.https.HttpsError('invalid-argument', `Stripe error: ${error.message}`);
+      }
+
+      throw new functions.https.HttpsError('internal', 'Failed to create payment intent');
     }
-  }
-);
+  });
 
 /**
  * Processes successful payment and updates order status
  */
-export const processPayment = functions.https.onCall(
-  async (data: PaymentProcessData, context) => {
-    // Verify authentication
+export const processPayment = functions
+  .region('europe-west3')
+  .https.onCall(async (data, context) => {
+    console.log('🚀 processPayment called with:', JSON.stringify(data));
+
     if (!context.auth) {
-      throw new functions.https.HttpsError(
-        'unauthenticated',
-        'User must be authenticated to process payment'
-      );
+      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
     }
 
     const { paymentIntentId, orderId, bidId } = data;
 
-    try {
-      // Validate input
-      if (!paymentIntentId || !orderId || !bidId) {
-        throw new functions.https.HttpsError(
-          'invalid-argument',
-          'Missing required payment processing data'
-        );
-      }
+    if (!paymentIntentId || !orderId || !bidId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Missing required data');
+    }
 
-      // Retrieve payment intent from Stripe
+    try {
+      // Verify payment succeeded
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
       if (paymentIntent.status !== 'succeeded') {
@@ -246,51 +230,45 @@ export const processPayment = functions.https.onCall(
         );
       }
 
+      // Get the bid to retrieve driverId
+      const bidDoc = await db.collection('bids').doc(bidId).get();
+      if (!bidDoc.exists) {
+        throw new functions.https.HttpsError('not-found', 'Bid not found');
+      }
+      const bidData = bidDoc.data();
+      const driverId = bidData?.driverId;
+
+      if (!driverId) {
+        throw new functions.https.HttpsError('invalid-argument', 'Bid has no driverId');
+      }
+
       // Update payment record
-      await admin.firestore()
-        .collection('payments')
-        .doc(paymentIntentId)
-        .update({
-          status: 'succeeded',
-          paidAt: new Date(),
-          updatedAt: new Date(),
-          stripePaymentIntentStatus: paymentIntent.status
-        });
-
-      // Update order status
-      await admin.firestore()
-        .collection('orders')
-        .doc(orderId)
-        .update({
-          status: 'paid',
-          acceptedBidId: bidId,
-          paymentStatus: 'paid',
-          paymentIntentId: paymentIntentId,
-          finalPrice: paymentIntent.metadata.bidAmount ? parseInt(paymentIntent.metadata.bidAmount) : 0,
-          platformFee: paymentIntent.metadata.platformFee ? parseInt(paymentIntent.metadata.platformFee) : 0,
-          paidAt: new Date(),
-          updatedAt: new Date(),
-        });
-
-      // Update bid status (bids are stored in top-level 'bids' collection)
-      await admin.firestore()
-        .collection('bids')
-        .doc(bidId)
-        .update({
-          status: 'accepted',
-          acceptedAt: new Date(),
-          updatedAt: new Date(),
-        });
-
-      console.log('✅ Payment processed successfully:', {
-        paymentIntentId,
-        orderId,
-        bidId,
-        amount: paymentIntent.amount / 100
+      await db.collection('payments').doc(paymentIntentId).update({
+        status: 'succeeded',
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // TODO: Send notification to driver about accepted bid
-      // This will be handled by the existing onBidAcceptedNotification trigger
+      // Update order - status 'accepted' so driver app can find it
+      await db.collection('orders').doc(orderId).update({
+        status: 'accepted',
+        acceptedBidId: bidId,
+        acceptedDriverId: driverId,
+        paymentStatus: 'paid',
+        paymentIntentId,
+        paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Update bid
+      await db.collection('bids').doc(bidId).update({
+        status: 'accepted',
+        acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      console.log('✅ processPayment SUCCESS');
 
       return {
         success: true,
@@ -300,237 +278,106 @@ export const processPayment = functions.https.onCall(
         paidAmount: paymentIntent.amount / 100
       };
 
-    } catch (error) {
-      console.error('❌ Error processing payment:', error);
-      
-      // Update payment record with error
-      if (paymentIntentId) {
-        await admin.firestore()
-          .collection('payments')
-          .doc(paymentIntentId)
-          .update({
-            status: 'failed',
-            errorMessage: error instanceof Error ? error.message : 'Unknown error',
-            updatedAt: new Date(),
-          });
-      }
+    } catch (error: any) {
+      console.error('❌ processPayment ERROR:', error.message);
 
       if (error instanceof functions.https.HttpsError) {
         throw error;
       }
-      throw new functions.https.HttpsError(
-        'internal',
-        'Failed to process payment'
-      );
+
+      throw new functions.https.HttpsError('internal', 'Failed to process payment');
     }
-  }
-);
+  });
 
 /**
- * Stripe webhook handler for payment events
+ * Stripe webhook handler
  */
-export const handleStripeWebhook = functions.https.onRequest(async (req, res) => {
-  const sig = req.headers['stripe-signature'] as string;
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+export const handleStripeWebhook = functions
+  .region('europe-west3')
+  .https.onRequest(async (req, res) => {
+    const sig = req.headers['stripe-signature'] as string;
+    const webhookSecret = functions.config().stripe?.webhook_secret || process.env.STRIPE_WEBHOOK_SECRET;
 
-  if (!webhookSecret) {
-    console.error('❌ Stripe webhook secret not configured');
-    res.status(400).send('Webhook secret not configured');
-    return;
-  }
+    if (!webhookSecret) {
+      console.error('❌ Webhook secret not configured');
+      res.status(400).send('Webhook secret not configured');
+      return;
+    }
 
-  let event: Stripe.Event;
+    let event: Stripe.Event;
 
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-  } catch (err) {
-    console.error('❌ Webhook signature verification failed:', err);
-    res.status(400).send(`Webhook Error: ${err}`);
-    return;
-  }
+    try {
+      event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+    } catch (err: any) {
+      console.error('❌ Webhook signature verification failed:', err.message);
+      res.status(400).send(`Webhook Error: ${err.message}`);
+      return;
+    }
 
-  console.log('📨 Stripe webhook received:', event.type);
+    console.log('📨 Webhook received:', event.type);
 
-  try {
-    switch (event.type) {
-      case 'payment_intent.succeeded':
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        await handlePaymentSuccess(paymentIntent);
-        break;
+    if (event.type === 'payment_intent.succeeded') {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
 
-      case 'payment_intent.payment_failed':
-        const failedPayment = event.data.object as Stripe.PaymentIntent;
-        await handlePaymentFailure(failedPayment);
-        break;
-
-      default:
-        console.log(`🔔 Unhandled event type: ${event.type}`);
+      await db.collection('payments').doc(paymentIntent.id).update({
+        status: 'succeeded',
+        webhookProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
     }
 
     res.json({ received: true });
-  } catch (error) {
-    console.error('❌ Error handling webhook:', error);
-    res.status(500).send('Webhook handler failed');
-  }
-});
+  });
 
 /**
- * Handle successful payment webhook
+ * Creates a simple payment link (alternative method)
  */
-async function handlePaymentSuccess(paymentIntent: Stripe.PaymentIntent) {
-  const paymentIntentId = paymentIntent.id;
-  
-  console.log('✅ Payment succeeded webhook:', paymentIntentId);
+export const createPaymentLink = functions
+  .region('europe-west3')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
 
-  // Update payment record
-  await admin.firestore()
-    .collection('payments')
-    .doc(paymentIntentId)
-    .update({
-      status: 'succeeded',
-      webhookProcessedAt: new Date(),
-      updatedAt: new Date(),
-    });
+    const { orderId, amount, driverName } = data;
 
-  // Additional webhook-specific processing can be added here
-}
-
-/**
- * Handle failed payment webhook
- */
-async function handlePaymentFailure(paymentIntent: Stripe.PaymentIntent) {
-  const paymentIntentId = paymentIntent.id;
-  
-  console.log('❌ Payment failed webhook:', paymentIntentId);
-
-  // Update payment record
-  await admin.firestore()
-    .collection('payments')
-    .doc(paymentIntentId)
-    .update({
-      status: 'failed',
-      webhookProcessedAt: new Date(),
-      updatedAt: new Date(),
-      failureReason: paymentIntent.last_payment_error?.message || 'Unknown failure'
-    });
-
-  // Reset order status if payment failed
-  if (paymentIntent.metadata.orderId) {
-    await admin.firestore()
-      .collection('orders')
-      .doc(paymentIntent.metadata.orderId)
-      .update({
-        status: 'bidding', // Reset to bidding status
-        paymentStatus: 'failed',
-        updatedAt: new Date(),
-      });
-  }
-}
-
-/**
- * Creates a Stripe Payment Link for platform fee payment
- * This is the new approach as requested by the project manager
- */
-export const createPaymentLink = functions.https.onCall(async (data, context) => {
-  // Validate authentication
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
-  }
-
-  const { orderId, amount, driverName } = data;
-
-  try {
-    // Validate input data
     if (!orderId || !amount || !driverName) {
-      throw new functions.https.HttpsError(
-        'invalid-argument',
-        'Missing required payment link data: orderId, amount, driverName'
-      );
+      throw new functions.https.HttpsError('invalid-argument', 'Missing required data');
     }
 
-    // Verify the user is the client for this order
-    const orderDoc = await admin.firestore()
-      .collection('orders')
-      .doc(orderId)
-      .get();
-
-    const order = orderDoc.data();
-    if (!order || order.clientId !== context.auth.uid) {
-      throw new functions.https.HttpsError(
-        'permission-denied',
-        'User not authorized for this order'
-      );
-    }
-
-    console.log('💰 Creating payment link:', {
-      orderId,
-      amount,
-      driverName,
-      clientId: context.auth.uid
-    });
-
-    // Create payment link за 15% platform fee
-    const paymentLink = await stripe.paymentLinks.create({
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          product_data: {
-            name: 'Такса платформа - Пътна помощ',
-            description: `Услуга от ${driverName}`,
-            images: ['https://i.imgur.com/EHyR2nP.png'], // Optional logo
-          },
-          unit_amount: Math.round(amount * 100), // Stripe uses cents/stotinki
-        },
-        quantity: 1,
-      }] as any,
-      metadata: {
-        orderId,
-        clientId: context.auth.uid,
-        type: 'platform_fee',
-        driverName
-      },
-      payment_method_types: ['card'],
-      // Success redirect
-      after_completion: {
-        type: 'hosted_confirmation',
-        hosted_confirmation: {
-          custom_message: 'Благодарим! Платформената такса е платена успешно.'
-        }
-      }
-    });
-
-    // Log за debugging
-    console.log('✅ Payment link created:', {
-      paymentLinkId: paymentLink.id,
-      url: paymentLink.url,
-      orderId
-    });
-
-    // Save payment link info to Firestore
-    await admin.firestore()
-      .collection('paymentLinks')
-      .doc(paymentLink.id)
-      .set({
-        paymentLinkId: paymentLink.id,
-        orderId,
-        clientId: context.auth.uid,
-        driverName,
-        amount,
-        status: 'created',
-        createdAt: new Date(),
-        updatedAt: new Date(),
+    try {
+      // Create a product first
+      const product = await stripe.products.create({
+        name: 'Platform Fee - Roadside Assistance',
+        description: `Service by ${driverName}`,
       });
 
-    return { 
-      success: true,
-      paymentUrl: paymentLink.url,
-      paymentLinkId: paymentLink.id
-    };
-  } catch (error) {
-    console.error('❌ Stripe payment link error:', error);
-    if (error instanceof functions.https.HttpsError) {
-      throw error;
+      // Create a price for this product
+      const price = await stripe.prices.create({
+        product: product.id,
+        unit_amount: Math.round(amount * 100),
+        currency: 'eur',
+      });
+
+      // Create payment link with the price
+      const paymentLink = await stripe.paymentLinks.create({
+        line_items: [{
+          price: price.id,
+          quantity: 1,
+        }],
+        metadata: {
+          orderId,
+          clientId: context.auth.uid,
+        },
+      });
+
+      return {
+        success: true,
+        paymentUrl: paymentLink.url,
+        paymentLinkId: paymentLink.id
+      };
+
+    } catch (error: any) {
+      console.error('❌ createPaymentLink ERROR:', error.message);
+      throw new functions.https.HttpsError('internal', 'Failed to create payment link');
     }
-    throw new functions.https.HttpsError('internal', 'Failed to create payment link');
-  }
-}); 
+  });

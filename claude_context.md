@@ -108,6 +108,25 @@ src/
 
 ## Known Issues / Behaviors
 
+### EAS Build on Windows/WSL (IMPORTANT)
+**Error**: `tar: Cannot mkdir: Permission denied` and `SCHILY.dev` header warnings when running `eas build`.
+
+**Cause**: Windows file attributes and temp directory path issues cause corrupted tar archives when EAS uploads the project.
+
+**Fix**: Run these commands in **PowerShell** BEFORE `eas build`:
+```powershell
+# Remove read-only attributes from all files
+attrib -R /S /D
+
+# Use a clean temp directory (avoids path issues)
+$env:TEMP="C:\Temp\eas"
+$env:TMP="C:\Temp\eas"
+New-Item -ItemType Directory -Force $env:TEMP | Out-Null
+
+# Now run the build
+eas build --platform android --profile development
+```
+
 ### Geocoding Errors (Intermittent)
 **Error**: `ExpoLocation.reverseGeocodeAsync: java.io.IOException: ijgj: UNAVAILABLE`
 
@@ -219,6 +238,36 @@ Platform takes 15% fee, driver receives rest directly.
   3. Google Cloud Console: Enable Maps SDK, create API key
   4. EAS Secrets: Add `GOOGLE_MAPS_API_KEY`
   5. New dev-client build required (native dependencies changed)
+
+### Firebase Functions Region - europe-west3
+**Region**: All functions now use `europe-west3` (Frankfurt) to match Firestore database location.
+
+**Why europe-west3:**
+- Firestore database is in `europe-west3`
+- Lowest latency for Bulgarian users (~30-50ms vs ~150-200ms for US)
+- GDPR compliance - data stays in EU
+- Avoids cross-region charges
+
+**Files configured:**
+- `functions/src/payments.ts` - All v2 functions use `{ region: 'europe-west3' }`
+- `functions/src/customPayments.ts` - All v1 HTTP functions use `.region('europe-west3')`
+- `functions/src/notifications.ts` - sendTestNotification uses `.region('europe-west3')`
+- `src/services/stripeService.ts` - Client calls `getFunctions(auth.app, 'europe-west3')`
+
+**Deployment:**
+```bash
+cd functions && npm run deploy
+```
+
+**Note**: If you see IAM permission errors, you need to grant Cloud Run permissions to the service agent. See Google Cloud Console → IAM.
+
+### 2026-01-10 (EAS Build Success)
+- **EAS Build issue resolved:**
+  - Problem: `tar: Cannot mkdir: Permission denied` errors on EAS servers
+  - Root cause: Windows file attributes + temp directory path issues
+  - Solution: `attrib -R /S /D` + custom temp dir (see Known Issues section)
+- **New dev-client APK built** with Apple Pay, Google Pay, and Google Maps SDK
+- Ready for testing on physical device
 
 ---
 

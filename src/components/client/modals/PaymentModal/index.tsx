@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import {
   View,
   Text,
@@ -39,15 +39,15 @@ export default function PaymentModal({
             <Text style={styles.priceBreakdownTitle}>Разбивка на цената:</Text>
             <View style={styles.priceRow}>
               <Text style={styles.priceLabel}>Обща цена:</Text>
-              <Text style={styles.priceValue}>{paymentModal.totalAmount.toFixed(2)} лв</Text>
+              <Text style={styles.priceValue}>{paymentModal.totalAmount.toFixed(2)} EUR</Text>
             </View>
             <View style={styles.priceRow}>
               <Text style={styles.priceLabel}>Платформена такса (15%):</Text>
-              <Text style={styles.priceValue}>{paymentModal.amount.toFixed(2)} лв</Text>
+              <Text style={styles.priceValue}>{paymentModal.amount.toFixed(2)} EUR</Text>
             </View>
             <View style={styles.priceDivider} />
             <Text style={styles.paymentNote}>
-              Останалите {(paymentModal.totalAmount - paymentModal.amount).toFixed(2)} лв се плащат директно на {paymentModal.driverName}
+              Останалите {(paymentModal.totalAmount - paymentModal.amount).toFixed(2)} EUR се плащат директно на {paymentModal.driverName}
             </Text>
           </View>
           
@@ -67,7 +67,7 @@ export default function PaymentModal({
               <>
                 <Ionicons name="card-outline" size={20} color={colors.textOnPrimary} />
                 <Text style={styles.payButtonText}>
-                  Плати {paymentModal.amount.toFixed(2)} лв с карта
+                  Плати {paymentModal.amount.toFixed(2)} EUR с карта
                 </Text>
               </>
             )}
