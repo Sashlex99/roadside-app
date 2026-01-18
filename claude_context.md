@@ -304,6 +304,33 @@ cd functions && npm run deploy
   - Uses Stripe Payment Sheet (not browser redirect)
   - Warning `No task registered for key StripeKeepJsAwakeTask` is harmless (can ignore)
 
+### 2026-01-18 (Locate Me Button)
+- **Added "Locate Me" button to map:**
+  - Floating button in bottom-right corner of `NativeMap` component
+  - White circular button (48x48px) with locate icon
+  - Shows spinner while refreshing location
+
+- **Fast location with background geocoding:**
+  - `getQuickLocation()` added to `locationService.ts`
+  - Uses `Location.Accuracy.Balanced` instead of `High` (faster GPS lock)
+  - Returns coordinates immediately, geocodes address in background
+  - Flow:
+    1. Press button → instant map animation to current position
+    2. GPS coordinates refresh (~300-500ms)
+    3. Header shows "Координати: 42.xxx, 25.xxx" temporarily
+    4. Background geocoding resolves address (~1-2s)
+    5. Header updates to real address (e.g., "ул. Витоша 15, София")
+
+- **New hook method `quickLocate()`:**
+  - Added to `useCurrentLocation` hook
+  - Calls `getQuickLocation()` with callback for address resolution
+  - Used by both `ClientHomeScreen` and `DriverHomeScreen`
+
+- **Key files changed:**
+  - `src/services/locationService.ts` - Added `getQuickLocation()` method
+  - `src/hooks/shared/useCurrentLocation.ts` - Added `quickLocate()` function
+  - `src/components/shared/NativeMap.tsx` - Added locate button UI and `onLocatePress` prop
+
 ## Setup for New Machine
 
 **Files needed (not in git):**

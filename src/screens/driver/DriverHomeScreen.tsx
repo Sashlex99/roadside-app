@@ -56,7 +56,7 @@ export default function DriverHomeScreen() {
   });
 
   // Use shared location hook
-  const { location, loading, error: locationError } = useCurrentLocation();
+  const { location, loading, error: locationError, isDegradedAccuracy, quickLocate } = useCurrentLocation();
 
   // Use driver orders hook
   const {
@@ -191,6 +191,7 @@ export default function DriverHomeScreen() {
         isOnline={isOnline}
         onToggleOnline={handleToggleOnline}
         onlineStatusSyncing={onlineStatusSyncing}
+        isDegradedAccuracy={isDegradedAccuracy}
         onSettingsPress={() => setShowSettingsPanel(true)}
       />
 
@@ -210,6 +211,7 @@ export default function DriverHomeScreen() {
         style={styles.mapContainer}
         variant="driver"
         onMapReady={() => console.log('🗺️ Driver map loaded')}
+        onLocatePress={quickLocate}
       />
 
       {/* Floating Action Button for Orders */}

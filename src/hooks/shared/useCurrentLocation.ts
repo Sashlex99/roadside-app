@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import * as Location from 'expo-location';
 import { LocationData } from '../../types/shared';
-import { locationService, getCurrentLocation, watchUserLocation } from '../../services/locationService';
+import { locationService, getCurrentLocation, watchUserLocation, isUsingDegradedAccuracy, getQuickLocation } from '../../services/locationService';
+
+// Maximum age for last known location fallback (in milliseconds)
+const MAX_FALLBACK_LOCATION_AGE_MS = 2 * 60 * 1000; // 2 minutes
 
 interface UseCurrentLocationOptions {
   enableWatching?: boolean;
@@ -19,6 +22,7 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
   const [location, setLocation] = useState<LocationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isDegradedAccuracy, setIsDegradedAccuracy] = useState(false);
   const watchSubscription = useRef<Location.LocationSubscription | null>(null);
 
   /**
@@ -31,19 +35,28 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
 
       console.log('📍 Getting current location with enhanced service...');
       const locationData = await getCurrentLocation();
-      
+
       setLocation(locationData);
-      console.log('✅ Location updated successfully:', locationData.address);
-      
+      setIsDegradedAccuracy(isUsingDegradedAccuracy());
+      console.log('✅ Location updated successfully:', locationData.address, isDegradedAccuracy ? '(degraded accuracy)' : '');
+
     } catch (err) {
       console.error('❌ Enhanced location error:', err);
-      
+
       // Try to use last known location as fallback
       const lastKnown = locationService.getLastKnownLocation();
-      if (lastKnown) {
-        console.log('🔄 Using last known location as fallback');
-        setLocation(lastKnown);
-        setError('Използва се последна известна локация');
+
+      if (lastKnown && lastKnown.timestamp) {
+        const ageMs = Date.now() - lastKnown.timestamp.getTime();
+
+        if (ageMs < MAX_FALLBACK_LOCATION_AGE_MS) {
+          console.log(`🔄 Using last known location as fallback (${Math.round(ageMs / 60000)}m old)`);
+          setLocation(lastKnown);
+          setError('Използва се последна известна локация');
+        } else {
+          console.warn(`⚠️ Last known location too old (${Math.round(ageMs / 60000)}m), not using`);
+          setError('Не можахме да определим вашата локация');
+        }
       } else {
         setError('Не можахме да определим вашата локация');
       }
@@ -74,8 +87,10 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
       // Start watching with enhanced service
       watchSubscription.current = await watchUserLocation(
         (locationData: LocationData) => {
-          console.log('📍 Enhanced location update:', locationData.address);
+          const degraded = isUsingDegradedAccuracy();
+          console.log('📍 Enhanced location update:', locationData.address, degraded ? '(degraded accuracy)' : '');
           setLocation(locationData);
+          setIsDegradedAccuracy(degraded);
           setError(null); // Clear any previous errors on successful update
         },
         {
@@ -124,6 +139,29 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
   };
 
   /**
+   * Quick locate - fast coordinates, then geocode address in background
+   * Ideal for "locate me" button
+   */
+  const quickLocate = async () => {
+    console.log('⚡ Quick locate...');
+    try {
+      // Get coordinates fast, address will update via callback
+      const locationData = await getQuickLocation((updatedLocation) => {
+        // Background geocoding completed - update with real address
+        console.log('⚡ Address resolved, updating location');
+        setLocation(updatedLocation);
+      });
+      setLocation(locationData);
+      setError(null);
+      return locationData;
+    } catch (err) {
+      console.error('❌ Quick locate failed:', err);
+      // Don't set error for quick locate - it's non-critical
+      throw err;
+    }
+  };
+
+  /**
    * Get location service health status
    */
   const getLocationHealth = async () => {
@@ -159,8 +197,10 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
     location,
     loading,
     error,
+    isDegradedAccuracy, // True when using fallback location due to poor GPS accuracy
     refreshLocation: getCurrentLocationEnhanced,
     forceRefreshLocation,
+    quickLocate, // Fast location without geocoding - ideal for "locate me" button
     startWatching: startWatchingEnhanced,
     stopWatching,
     isWatching: watchSubscription.current !== null,

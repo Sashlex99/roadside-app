@@ -51,7 +51,7 @@ export default function ClientHomeScreen() {
   });
 
   // Use shared location hook
-  const { location, loading, error: locationError } = useCurrentLocation();
+  const { location, loading, error: locationError, isDegradedAccuracy, quickLocate } = useCurrentLocation();
 
   // UI state variables first
   const [showRequestModal, setShowRequestModal] = useState(false);
@@ -275,6 +275,7 @@ export default function ClientHomeScreen() {
         user={user}
         location={location}
         onlineDriversCount={onlineDriversCount}
+        isDegradedAccuracy={isDegradedAccuracy}
         onSettingsPress={() => setShowSettingsPanel(true)}
       />
 
@@ -316,6 +317,7 @@ export default function ClientHomeScreen() {
         location={location}
         style={styles.mapContainer}
         onMapReady={() => console.log('🗺️ Client map loaded')}
+        onLocatePress={quickLocate}
         variant="client"
       />
 

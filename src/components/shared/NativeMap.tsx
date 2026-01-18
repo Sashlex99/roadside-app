@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Platform, TouchableOpacity } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../constants/colors';
@@ -10,8 +10,10 @@ interface NativeMapProps {
   driverLocation?: LocationData | null;  // For real-time driver tracking
   style?: any;
   onMapReady?: () => void;
+  onLocatePress?: () => void;  // Callback for locate button press
   showUserLocation?: boolean;
   showDriverMarker?: boolean;
+  showLocateButton?: boolean;  // Whether to show the locate button
   variant?: 'client' | 'driver';
 }
 
@@ -62,13 +64,51 @@ export default function NativeMap({
   driverLocation,
   style,
   onMapReady,
+  onLocatePress,
   showUserLocation = true,
   showDriverMarker = false,
+  showLocateButton = true,
   variant = 'client'
 }: NativeMapProps) {
   const mapRef = useRef<MapView>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [mapReady, setMapReady] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
+
+  // Handle locate button press
+  const handleLocatePress = async () => {
+    // Immediately animate to current location (instant feedback)
+    if (location && mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 300);
+    }
+
+    // Then refresh location in background
+    if (onLocatePress) {
+      setIsLocating(true);
+      try {
+        const newLocation = await onLocatePress();
+        // Animate to new location if it changed
+        if (newLocation && mapRef.current) {
+          mapRef.current.animateToRegion({
+            latitude: newLocation.latitude,
+            longitude: newLocation.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }, 300);
+        }
+      } catch (error) {
+        // Silently fail - we already animated to current location
+        console.log('📍 Location refresh failed, using current position');
+      } finally {
+        setIsLocating(false);
+      }
+    }
+  };
 
   // Animate to user location when it changes
   useEffect(() => {
@@ -167,6 +207,22 @@ export default function NativeMap({
         )}
       </MapView>
 
+      {/* Locate Me Button */}
+      {showLocateButton && (
+        <TouchableOpacity
+          style={styles.locateButton}
+          onPress={handleLocatePress}
+          activeOpacity={0.8}
+          disabled={isLocating}
+        >
+          {isLocating ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Ionicons name="locate" size={24} color={colors.primary} />
+          )}
+        </TouchableOpacity>
+      )}
+
       {/* Loading overlay */}
       {isLoading && (
         <View style={styles.loadingOverlay}>
@@ -259,6 +315,22 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  locateButton: {
+    position: 'absolute',
+    bottom: 100,
+    right: 16,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 5,
   },
