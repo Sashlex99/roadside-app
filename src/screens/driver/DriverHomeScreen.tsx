@@ -112,13 +112,12 @@ export default function DriverHomeScreen() {
     
     const performCleanup = async () => {
       try {
-        console.log('🧹 [DriverHomeScreen] Starting order cleanup...');
         const result = await cleanupExpiredOrders();
-        
+
         if (result.cleaned > 0) {
-          console.log(`✅ [DriverHomeScreen] Cleaned up ${result.cleaned} expired orders`);
-          
-          // Optional: Show notification to driver about cleanup
+          if (__DEV__) console.log(`[Driver] Cleaned ${result.cleaned} expired orders`);
+
+          // Show notification to driver about cleanup
           if (result.cleaned > 3) {
             setCustomModal({
               visible: true,
@@ -133,12 +132,12 @@ export default function DriverHomeScreen() {
             });
           }
         }
-        
-        if (result.errors.length > 0) {
-          console.warn(`⚠️ [DriverHomeScreen] ${result.errors.length} errors during cleanup:`, result.errors);
+
+        if (result.errors.length > 0 && __DEV__) {
+          console.warn(`[Driver] ${result.errors.length} cleanup errors:`, result.errors);
         }
       } catch (error) {
-        console.error('❌ [DriverHomeScreen] Error during order cleanup:', error);
+        if (__DEV__) console.error('[Driver] Cleanup error:', error);
       }
     };
     
@@ -210,7 +209,7 @@ export default function DriverHomeScreen() {
         location={location}
         style={styles.mapContainer}
         variant="driver"
-        onMapReady={() => console.log('🗺️ Driver map loaded')}
+        onMapReady={() => { if (__DEV__) console.log('[Map] Driver map loaded'); }}
         onLocatePress={quickLocate}
       />
 

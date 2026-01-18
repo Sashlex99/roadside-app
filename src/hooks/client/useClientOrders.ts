@@ -48,18 +48,12 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
 
     const setupSubscription = () => {
       try {
-        console.log(`🔄 Setting up orders subscription (attempt ${retryCount + 1}/${maxRetries + 1})`);
-        
         const unsubscribe = subscribeToClientOrders(user.uid, (orders) => {
-          if (__DEV__) console.log('Received orders:', orders.map(o => ({ id: o.id, status: o.status, expiresAt: o.expiresAt })));
-          
-          // ✨ Exclude expired orders from active consideration
-          const openOrder = orders.find((o) => 
+          // Exclude expired orders from active consideration
+          const openOrder = orders.find((o) =>
             ['pending', 'searching', 'bidding', 'payment_pending', 'accepted'].includes(o.status) &&
             o.status !== 'expired'
           );
-          
-          if (__DEV__) console.log('Active order found:', openOrder ? { id: openOrder.id, status: openOrder.status, expiresAt: openOrder.expiresAt } : null);
           
           setActiveOrder(openOrder || null);
           
@@ -77,23 +71,17 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
         
         return unsubscribe;
       } catch (subscriptionError: any) {
-        console.error('❌ Error setting up orders subscription:', subscriptionError);
+        if (__DEV__) console.error('[Orders] Subscription error:', subscriptionError);
         
         // ✅ IMPROVED: Handle permission errors more intelligently
         if (subscriptionError?.code === 'permission-denied') {
           retryCount++;
           
-          // ✅ CRITICAL: Don't immediately logout - try to refresh auth first
+          // Don't immediately logout - try to refresh auth first
           if (retryCount <= maxRetries) {
-            console.log(`⚠️ Permission denied, retrying in ${retryCount * 2} seconds (attempt ${retryCount}/${maxRetries})`);
-            
             // Try auth refresh first
             if (typeof refreshAuth === 'function') {
-              refreshAuth().then(() => {
-                console.log('🔄 Auth refreshed, retrying subscription...');
-              }).catch((refreshError) => {
-                console.warn('⚠️ Auth refresh failed:', refreshError);
-              });
+              refreshAuth().catch(() => {});
             }
             
             // Exponential backoff retry
@@ -111,8 +99,8 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
             }, retryCount * 2000);
             
           } else {
-            // ✅ Only logout after multiple failed retries
-            console.error('❌ Max retries exceeded for orders subscription - forcing logout');
+            // Only logout after multiple failed retries
+            if (__DEV__) console.error('[Orders] Max retries exceeded - forcing logout');
             setCustomModal({
               visible: true,
               title: '🔐 Проблем с достъпа',
@@ -131,11 +119,10 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
             });
           }
         } else {
-          // ✅ Non-permission errors - retry with exponential backoff
+          // Non-permission errors - retry with exponential backoff
           retryCount++;
           if (retryCount <= maxRetries) {
-            console.log(`⚠️ Subscription error, retrying in ${retryCount * 2} seconds...`);
-            // ✅ FIXED: Clear any existing retry timeout before setting new one
+            // Clear any existing retry timeout before setting new one
             if (retryTimeout) {
               clearTimeout(retryTimeout);
               retryTimeout = null;
@@ -174,104 +161,49 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
     if (!orderToSubscribeTo) {
       setBids([]);
       setAcceptedDriverName('');
-      console.log('🔄 [useClientOrders] No order to subscribe to, clearing bids');
       return;
     }
-    
-    console.log('🔄 [useClientOrders] Setting up bids subscription for order:', {
-      orderId: orderToSubscribeTo.id,
-      status: activeOrder?.status || 'possibly expired',
-      isActiveOrder: !!activeOrder
-    });
-    
+
     const unsub = subscribeToBidsForOrder(orderToSubscribeTo.id, (b) => {
-      console.log('📥 [useClientOrders] Received bids update:', {
-        orderId: orderToSubscribeTo.id,
-        bidsCount: b.length,
-        bids: b.map(bid => ({ id: bid.id, price: bid.proposedPrice, driverName: bid.driverInfo?.name }))
-      });
-      
       setBids(b);
-      
-      // Check if we need to set accepted driver name
+
+      // Set accepted driver name if order is accepted
       if (activeOrder?.status === 'accepted' && activeOrder.acceptedBidId) {
         const acceptedBid = b.find((x) => x.id === activeOrder.acceptedBidId);
-        console.log('🔍 [useClientOrders] Looking for accepted bid:', {
-          acceptedBidId: activeOrder.acceptedBidId,
-          foundBid: acceptedBid ? {
-            id: acceptedBid.id,
-            driverName: acceptedBid.driverInfo?.name,
-            price: acceptedBid.proposedPrice
-          } : null,
-          allBids: b.map(bid => ({ id: bid.id, driverName: bid.driverInfo?.name }))
-        });
-        
-        if (acceptedBid && acceptedBid.driverInfo?.name) {
-          console.log('✅ Setting accepted driver name:', acceptedBid.driverInfo.name);
+        if (acceptedBid?.driverInfo?.name) {
           setAcceptedDriverName(acceptedBid.driverInfo.name);
-        } else {
-          console.log('⚠️ Accepted bid found but no driver name available');
         }
       }
     });
-    return () => {
-      console.log('🧹 [useClientOrders] Cleaning up bids subscription for order:', orderToSubscribeTo.id);
-      unsub();
-    };
+    return () => unsub();
   }, [authReady, activeOrder?.id, lastOrderId]); // Removed activeOrder?.status to prevent restart on status changes
 
   // -------- Handle accepted order driver name --------
   useEffect(() => {
     if (activeOrder?.status === 'accepted' && activeOrder.acceptedBidId && bids.length > 0) {
-      console.log('🔍 [useClientOrders] Order status changed to accepted, finding driver name:', {
-        orderId: activeOrder.id,
-        acceptedBidId: activeOrder.acceptedBidId,
-        bidsCount: bids.length,
-        currentAcceptedDriverName: acceptedDriverName
-      });
-      
       const acceptedBid = bids.find(bid => bid.id === activeOrder.acceptedBidId);
-      if (acceptedBid && acceptedBid.driverInfo?.name) {
-        console.log('✅ Found accepted bid and setting driver name:', acceptedBid.driverInfo.name);
+      if (acceptedBid?.driverInfo?.name) {
         setAcceptedDriverName(acceptedBid.driverInfo.name);
-      } else {
-        console.log('⚠️ Could not find accepted bid or driver name:', {
-          foundBid: !!acceptedBid,
-          hasDriverInfo: !!acceptedBid?.driverInfo,
-          hasDriverName: !!acceptedBid?.driverInfo?.name
-        });
       }
-    } else if (activeOrder?.status !== 'accepted') {
-      // Clear driver name if order is not accepted
-      if (acceptedDriverName) {
-        console.log('🔄 Clearing accepted driver name - order not accepted');
-        setAcceptedDriverName('');
-      }
+    } else if (activeOrder?.status !== 'accepted' && acceptedDriverName) {
+      setAcceptedDriverName('');
     }
   }, [activeOrder?.status, activeOrder?.acceptedBidId, bids]);
 
   // -------- Expiration countdown --------
   useEffect(() => {
     if (!activeOrder?.expiresAt) return;
-    
-    console.log('🔄 [useClientOrders] Setting up expiration countdown for order:', activeOrder.id);
-    
+
     const interval = setInterval(async () => {
       try {
         const diff = Math.max(0, activeOrder.expiresAt!.getTime() - Date.now());
         setTimeLeftMs(diff);
-        
+
         // Only expire orders that are still waiting for bids/payment
         const canExpire = ['pending', 'searching', 'bidding'].includes(activeOrder.status);
         const isNotExpired = activeOrder.status !== 'expired';
-        
+
         if (diff === 0 && isNotExpired && canExpire) {
-          console.log('⏰ Timer expired for order:', {
-            orderId: activeOrder.id,
-            status: activeOrder.status,
-            canExpire,
-            willExpire: true
-          });
           
           try {
             await updateOrderStatus(activeOrder.id, 'expired');
@@ -310,26 +242,15 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
               ]
             });
           } catch (e) {
-            console.error('Failed to mark order expired', e);
+            if (__DEV__) console.error('[Orders] Failed to mark expired:', e);
           }
-        } else if (diff === 0 && isNotExpired && !canExpire) {
-          console.log('⏰ Timer expired but order is active - not expiring:', {
-            orderId: activeOrder.id,
-            status: activeOrder.status,
-            canExpire,
-            willExpire: false,
-            reason: 'Order is accepted/paid/in-progress'
-          });
         }
       } catch (error) {
-        console.error('Error in expiration countdown interval:', error);
+        if (__DEV__) console.error('[Orders] Expiration countdown error:', error);
       }
     }, 1000);
-    
-    return () => {
-      console.log('🧹 [useClientOrders] Cleaning up expiration countdown for order:', activeOrder?.id);
-      clearInterval(interval);
-    };
+
+    return () => clearInterval(interval);
   }, [activeOrder?.id, activeOrder?.expiresAt, activeOrder?.status, setCustomModal]);
 
   return { activeOrder, bids, timeLeftMs, acceptedDriverName };

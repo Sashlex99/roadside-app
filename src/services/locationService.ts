@@ -46,6 +46,56 @@ export class LocationService {
     };
   }
 
+  // ==================== Helper Methods ====================
+
+  /** Check if GPS accuracy is acceptable */
+  private isAccuracyAcceptable(accuracy: number): boolean {
+    return accuracy > 0 && accuracy <= this.config.minAccuracyMeters;
+  }
+
+  /** Try to get recent fallback location if current accuracy is poor */
+  private tryGetFallbackLocation(currentAccuracy: number): LocationData | null {
+    if (this.isAccuracyAcceptable(currentAccuracy) || !this.lastGoodLocation) {
+      return null;
+    }
+
+    const ageMs = this.lastGoodLocation.timestamp
+      ? Date.now() - this.lastGoodLocation.timestamp.getTime()
+      : Infinity;
+
+    // Use last good location if it's less than 5 minutes old
+    if (ageMs < 5 * 60 * 1000) {
+      this._isUsingDegradedAccuracy = true;
+      return {
+        ...this.lastGoodLocation,
+        timestamp: new Date()
+      };
+    }
+
+    return null;
+  }
+
+  /** Get address with automatic fallback to coordinates */
+  private async getAddressWithFallback(latitude: number, longitude: number): Promise<string> {
+    try {
+      return await this.reverseGeocode(latitude, longitude);
+    } catch {
+      return this.generateFallbackAddress(latitude, longitude);
+    }
+  }
+
+  /** Update accuracy tracking state */
+  private updateAccuracyState(result: LocationData, isGood: boolean): void {
+    if (isGood) {
+      this.lastGoodLocation = result;
+      this._isUsingDegradedAccuracy = false;
+    } else {
+      this._isUsingDegradedAccuracy = true;
+    }
+  }
+
+  // ==================== Public Methods ====================
+
   /**
    * Get current position with circuit breaker protection
    */
@@ -70,7 +120,7 @@ export class LocationService {
       const cached = this.addressCache.get(cacheKey);
       
       if (cached && Date.now() - cached.timestamp < 300000) { // 5 minutes cache
-        console.log('📍 Using cached address');
+        if (__DEV__) console.log('[Location] Using cached address');
         return cached.address;
       }
     }
@@ -114,7 +164,7 @@ export class LocationService {
 
         // Only apply if this is still the most recent request
         if (currentSequence !== this.watchSequence) {
-          console.log('📍 Discarding stale location update (sequence mismatch)');
+          if (__DEV__) console.log('[Location] Discarding stale update');
           return;
         }
 
@@ -124,11 +174,11 @@ export class LocationService {
       } catch (error) {
         // Only apply fallback if this is still the most recent request
         if (currentSequence !== this.watchSequence) {
-          console.log('📍 Discarding stale fallback location update');
+          if (__DEV__) console.log('[Location] Discarding stale fallback');
           return;
         }
 
-        console.warn('📍 Location update failed, using fallback:', error);
+        if (__DEV__) console.warn('[Location] Update failed, using fallback:', error);
 
         const fallbackData: LocationData = {
           latitude: locationUpdate.coords.latitude,
@@ -181,12 +231,12 @@ export class LocationService {
    * Force refresh location (for manual retry)
    */
   async forceRefreshLocation(): Promise<LocationData> {
-    console.log('🔄 Force refreshing location...');
+    if (__DEV__) console.log('[Location] Force refreshing...');
 
     try {
       return await this.getCurrentPosition();
     } catch (error) {
-      console.error('❌ Force refresh failed:', error);
+      console.error('[Location] Force refresh failed:', error);
 
       // Alert for critical location failure
       await sendHealthAlert(
@@ -205,7 +255,7 @@ export class LocationService {
    * Returns coordinates immediately, address will be geocoded via callback
    */
   async getQuickLocation(onAddressResolved?: (location: LocationData) => void): Promise<LocationData> {
-    console.log('⚡ Getting quick location...');
+    if (__DEV__) console.log('[Location] Quick locate...');
 
     try {
       // Check permissions
@@ -222,7 +272,7 @@ export class LocationService {
       const { latitude, longitude } = locationData.coords;
       const accuracy = locationData.coords.accuracy || 0;
 
-      console.log(`⚡ Quick location: ${latitude.toFixed(5)}, ${longitude.toFixed(5)} (accuracy: ${accuracy.toFixed(1)}m)`);
+      if (__DEV__) console.log(`[Location] Quick: ${latitude.toFixed(5)}, ${longitude.toFixed(5)} (${accuracy.toFixed(1)}m)`);
 
       // Check cache first for instant address
       const cacheKey = `${latitude.toFixed(5)},${longitude.toFixed(5)}`;
@@ -233,12 +283,11 @@ export class LocationService {
 
       if (cached && Date.now() - cached.timestamp < 300000) {
         address = cached.address;
-        console.log('⚡ Using cached address:', address);
+        if (__DEV__) console.log('[Location] Using cached address');
       } else {
         // Use coordinates temporarily, geocode in background
         address = this.generateFallbackAddress(latitude, longitude);
         needsGeocoding = true;
-        console.log('⚡ Will geocode address in background');
       }
 
       const result: LocationData = {
@@ -252,8 +301,8 @@ export class LocationService {
       // Update last known location
       this.lastKnownLocation = result;
 
-      // If accuracy is good, also update lastGoodLocation
-      if (accuracy > 0 && accuracy <= this.config.minAccuracyMeters) {
+      // Update accuracy state
+      if (this.isAccuracyAcceptable(accuracy)) {
         this.lastGoodLocation = result;
         this._isUsingDegradedAccuracy = false;
       }
@@ -270,22 +319,22 @@ export class LocationService {
             if (this.lastGoodLocation?.latitude === latitude && this.lastGoodLocation?.longitude === longitude) {
               this.lastGoodLocation = updatedLocation;
             }
-            console.log('⚡ Background geocoding complete:', resolvedAddress);
+            if (__DEV__) console.log('[Location] Background geocoding complete');
             onAddressResolved(updatedLocation);
           })
           .catch((err) => {
-            console.warn('⚡ Background geocoding failed:', err);
+            if (__DEV__) console.warn('[Location] Background geocoding failed:', err);
             // Keep coordinates, don't call callback
           });
       }
 
       return result;
     } catch (error) {
-      console.error('❌ Quick location failed:', error);
+      console.error('[Location] Quick location failed:', error);
 
       // Return last known location if available
       if (this.lastKnownLocation) {
-        console.log('⚡ Using last known location as fallback');
+        if (__DEV__) console.log('[Location] Using last known as fallback');
         return this.lastKnownLocation;
       }
 
@@ -309,37 +358,19 @@ export class LocationService {
 
     const { latitude, longitude } = locationData.coords;
     const accuracy = locationData.coords.accuracy || 0;
+    const isGood = this.isAccuracyAcceptable(accuracy);
 
-    // Check if accuracy is acceptable
-    const isAccuracyGood = accuracy > 0 && accuracy <= this.config.minAccuracyMeters;
+    if (__DEV__) console.log(`[Location] GPS: ${accuracy.toFixed(1)}m, acceptable=${isGood}`);
 
-    console.log(`📍 GPS reading: accuracy=${accuracy.toFixed(1)}m, threshold=${this.config.minAccuracyMeters}m, acceptable=${isAccuracyGood}`);
-
-    // If accuracy is poor and we have a recent good location, use that instead
-    if (!isAccuracyGood && this.lastGoodLocation) {
-      const ageMs = this.lastGoodLocation.timestamp
-        ? Date.now() - this.lastGoodLocation.timestamp.getTime()
-        : Infinity;
-
-      // Use last good location if it's less than 5 minutes old
-      if (ageMs < 5 * 60 * 1000) {
-        console.log(`⚠️ Poor accuracy (${accuracy.toFixed(1)}m), using last good location (${Math.round(ageMs / 1000)}s old)`);
-        this._isUsingDegradedAccuracy = true;
-        return {
-          ...this.lastGoodLocation,
-          timestamp: new Date() // Update timestamp to now
-        };
-      }
+    // Try fallback if accuracy is poor
+    const fallback = this.tryGetFallbackLocation(accuracy);
+    if (fallback) {
+      if (__DEV__) console.log('[Location] Using fallback location');
+      return fallback;
     }
 
-    // Get address with fallback handling
-    let address: string;
-    try {
-      address = await this.reverseGeocode(latitude, longitude);
-    } catch (error) {
-      console.warn('📍 Geocoding failed, using fallback address:', error);
-      address = this.generateFallbackAddress(latitude, longitude);
-    }
+    // Get address
+    const address = await this.getAddressWithFallback(latitude, longitude);
 
     const result: LocationData = {
       latitude,
@@ -349,23 +380,13 @@ export class LocationService {
       timestamp: new Date()
     };
 
-    // Store as last good location if accuracy is acceptable
-    if (isAccuracyGood) {
-      this.lastGoodLocation = result;
-      this._isUsingDegradedAccuracy = false;
-      console.log(`✅ Good accuracy (${accuracy.toFixed(1)}m), stored as last good location`);
-    } else {
-      // No good fallback available, use current reading but flag it
-      this._isUsingDegradedAccuracy = true;
-      console.log(`⚠️ Poor accuracy (${accuracy.toFixed(1)}m), no recent good location available`);
-    }
-
+    this.updateAccuracyState(result, isGood);
     return result;
   }
 
   private async reverseGeocodeInternal(latitude: number, longitude: number): Promise<string> {
     try {
-      console.log(`📍 Geocoding: ${latitude}, ${longitude}`);
+      if (__DEV__) console.log(`[Geocoding] ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
       
       const addressResponse = await Location.reverseGeocodeAsync({
         latitude,
@@ -388,11 +409,11 @@ export class LocationService {
         });
       }
 
-      console.log(`✅ Geocoded address: ${address}`);
+      if (__DEV__) console.log(`[Geocoding] Result: ${address}`);
       return address;
 
     } catch (error) {
-      console.error('❌ Geocoding failed:', error);
+      console.error('[Geocoding] Failed:', error);
       
       // Try alternative geocoding services if available
       if (this.config.enableFallbacks) {
@@ -406,37 +427,16 @@ export class LocationService {
   private async processLocationUpdate(locationUpdate: Location.LocationObject): Promise<LocationData> {
     const { latitude, longitude } = locationUpdate.coords;
     const accuracy = locationUpdate.coords.accuracy || 0;
+    const isGood = this.isAccuracyAcceptable(accuracy);
 
-    // Check if accuracy is acceptable
-    const isAccuracyGood = accuracy > 0 && accuracy <= this.config.minAccuracyMeters;
-
-    console.log(`📍 Watch update: accuracy=${accuracy.toFixed(1)}m, acceptable=${isAccuracyGood}`);
-
-    // If accuracy is poor and we have a recent good location, use that instead
-    if (!isAccuracyGood && this.lastGoodLocation) {
-      const ageMs = this.lastGoodLocation.timestamp
-        ? Date.now() - this.lastGoodLocation.timestamp.getTime()
-        : Infinity;
-
-      // Use last good location if it's less than 5 minutes old
-      if (ageMs < 5 * 60 * 1000) {
-        console.log(`⚠️ Watch: Poor accuracy (${accuracy.toFixed(1)}m), keeping last good location`);
-        this._isUsingDegradedAccuracy = true;
-        return {
-          ...this.lastGoodLocation,
-          timestamp: new Date()
-        };
-      }
+    // Try fallback if accuracy is poor
+    const fallback = this.tryGetFallbackLocation(accuracy);
+    if (fallback) {
+      return fallback;
     }
 
-    // Try to get address with circuit breaker protection
-    let address: string;
-    try {
-      address = await this.reverseGeocode(latitude, longitude);
-    } catch (error) {
-      // Use fallback address if geocoding fails
-      address = this.generateFallbackAddress(latitude, longitude);
-    }
+    // Get address
+    const address = await this.getAddressWithFallback(latitude, longitude);
 
     const result: LocationData = {
       latitude,
@@ -446,14 +446,7 @@ export class LocationService {
       timestamp: new Date()
     };
 
-    // Store as last good location if accuracy is acceptable
-    if (isAccuracyGood) {
-      this.lastGoodLocation = result;
-      this._isUsingDegradedAccuracy = false;
-    } else {
-      this._isUsingDegradedAccuracy = true;
-    }
-
+    this.updateAccuracyState(result, isGood);
     return result;
   }
 
@@ -489,7 +482,7 @@ export class LocationService {
   }
 
   private async tryAlternativeGeocoding(latitude: number, longitude: number): Promise<string> {
-    console.log('🔄 Trying alternative geocoding methods...');
+    if (__DEV__) console.log('[Geocoding] Trying alternative methods...');
     
     // Alternative 1: Use geocodeAsync with approximate address
     try {
@@ -561,7 +554,7 @@ export class LocationService {
       const cached = this.addressCache.get(cacheKey);
       
       if (cached && Date.now() - cached.timestamp < 600000) { // 10 minutes cache for addresses
-        console.log('📍 Using cached geocoding result');
+        if (__DEV__) console.log('[Geocoding] Using cached result');
         const coords = JSON.parse(cached.address);
         return coords;
       }
@@ -579,12 +572,12 @@ export class LocationService {
 
   private async geocodeAddressInternal(address: string): Promise<{ latitude: number; longitude: number } | null> {
     try {
-      console.log(`🗺️ Geocoding address: ${address}`);
+      if (__DEV__) console.log(`[Geocoding] Address: ${address}`);
       
       const results = await Location.geocodeAsync(address);
       
       if (results.length === 0) {
-        console.warn('📍 No geocoding results found for address:', address);
+        if (__DEV__) console.warn('[Geocoding] No results for:', address);
         return null;
       }
 
@@ -602,11 +595,11 @@ export class LocationService {
         });
       }
 
-      console.log(`✅ Geocoded address "${address}" to:`, result);
+      if (__DEV__) console.log('[Geocoding] Result:', result);
       return result;
 
     } catch (error) {
-      console.error('❌ Address geocoding failed:', error);
+      console.error('[Geocoding] Address geocoding failed:', error);
       throw error;
     }
   }

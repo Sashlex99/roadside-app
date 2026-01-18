@@ -10,7 +10,7 @@ interface NativeMapProps {
   driverLocation?: LocationData | null;  // For real-time driver tracking
   style?: any;
   onMapReady?: () => void;
-  onLocatePress?: () => void;  // Callback for locate button press
+  onLocatePress?: () => Promise<LocationData | void> | void;  // Callback for locate button press
   showUserLocation?: boolean;
   showDriverMarker?: boolean;
   showLocateButton?: boolean;  // Whether to show the locate button
@@ -103,7 +103,7 @@ export default function NativeMap({
         }
       } catch (error) {
         // Silently fail - we already animated to current location
-        console.log('📍 Location refresh failed, using current position');
+        if (__DEV__) console.log('[Map] Location refresh failed, using current position');
       } finally {
         setIsLocating(false);
       }
@@ -127,7 +127,7 @@ export default function NativeMap({
     setIsLoading(false);
     setMapReady(true);
     onMapReady?.();
-    console.log('🗺️ Google Maps loaded successfully');
+    if (__DEV__) console.log('[Map] Google Maps loaded');
   };
 
   // Show loading placeholder if no location
@@ -151,7 +151,7 @@ export default function NativeMap({
   };
 
   // Marker colors based on variant
-  const userMarkerColor = variant === 'driver' ? colors.secondary || '#2196F3' : colors.primary;
+  const userMarkerColor = variant === 'driver' ? '#2196F3' : colors.primary;
 
   return (
     <View style={[styles.container, style]}>

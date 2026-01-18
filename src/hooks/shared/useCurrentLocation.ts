@@ -33,15 +33,13 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
       setLoading(true);
       setError(null);
 
-      console.log('📍 Getting current location with enhanced service...');
       const locationData = await getCurrentLocation();
 
       setLocation(locationData);
       setIsDegradedAccuracy(isUsingDegradedAccuracy());
-      console.log('✅ Location updated successfully:', locationData.address, isDegradedAccuracy ? '(degraded accuracy)' : '');
 
     } catch (err) {
-      console.error('❌ Enhanced location error:', err);
+      if (__DEV__) console.error('[useLocation] Error:', err);
 
       // Try to use last known location as fallback
       const lastKnown = locationService.getLastKnownLocation();
@@ -50,11 +48,9 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
         const ageMs = Date.now() - lastKnown.timestamp.getTime();
 
         if (ageMs < MAX_FALLBACK_LOCATION_AGE_MS) {
-          console.log(`🔄 Using last known location as fallback (${Math.round(ageMs / 60000)}m old)`);
           setLocation(lastKnown);
           setError('Използва се последна известна локация');
         } else {
-          console.warn(`⚠️ Last known location too old (${Math.round(ageMs / 60000)}m), not using`);
           setError('Не можахме да определим вашата локация');
         }
       } else {
@@ -82,16 +78,12 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
         watchSubscription.current.remove();
       }
 
-      console.log('🗺️ Starting enhanced location watching...');
-
       // Start watching with enhanced service
       watchSubscription.current = await watchUserLocation(
         (locationData: LocationData) => {
-          const degraded = isUsingDegradedAccuracy();
-          console.log('📍 Enhanced location update:', locationData.address, degraded ? '(degraded accuracy)' : '');
           setLocation(locationData);
-          setIsDegradedAccuracy(degraded);
-          setError(null); // Clear any previous errors on successful update
+          setIsDegradedAccuracy(isUsingDegradedAccuracy());
+          setError(null);
         },
         {
           accuracy: Location.Accuracy.High,
@@ -100,10 +92,8 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
         }
       );
 
-      console.log('✅ Enhanced location watching started');
-      
     } catch (err) {
-      console.error('❌ Enhanced location watching error:', err);
+      if (__DEV__) console.error('[useLocation] Watch error:', err);
       setError('Не можахме да следим вашата локация');
     }
   };
@@ -115,7 +105,6 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
     if (watchSubscription.current) {
       watchSubscription.current.remove();
       watchSubscription.current = null;
-      console.log('🗺️ Enhanced location watching stopped');
     }
   };
 
@@ -123,15 +112,13 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
    * Force refresh location (manual retry)
    */
   const forceRefreshLocation = async () => {
-    console.log('🔄 Force refreshing location...');
     try {
       setLoading(true);
       const locationData = await locationService.forceRefreshLocation();
       setLocation(locationData);
       setError(null);
-      console.log('✅ Force refresh successful');
     } catch (err) {
-      console.error('❌ Force refresh failed:', err);
+      if (__DEV__) console.error('[useLocation] Force refresh failed:', err);
       setError('Не можахме да обновим локацията');
     } finally {
       setLoading(false);
@@ -143,20 +130,16 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
    * Ideal for "locate me" button
    */
   const quickLocate = async () => {
-    console.log('⚡ Quick locate...');
     try {
       // Get coordinates fast, address will update via callback
       const locationData = await getQuickLocation((updatedLocation) => {
-        // Background geocoding completed - update with real address
-        console.log('⚡ Address resolved, updating location');
         setLocation(updatedLocation);
       });
       setLocation(locationData);
       setError(null);
       return locationData;
     } catch (err) {
-      console.error('❌ Quick locate failed:', err);
-      // Don't set error for quick locate - it's non-critical
+      if (__DEV__) console.error('[useLocation] Quick locate failed:', err);
       throw err;
     }
   };
@@ -167,18 +150,16 @@ export function useCurrentLocation(options: UseCurrentLocationOptions = {}) {
   const getLocationHealth = async () => {
     try {
       const health = await locationService.healthCheck();
-      console.log('🏥 Location service health:', health);
+      if (__DEV__) console.log('[useLocation] Health:', health);
       return health;
     } catch (error) {
-      console.error('❌ Location health check failed:', error);
+      if (__DEV__) console.error('[useLocation] Health check failed:', error);
       return null;
     }
   };
 
   // Initialize location service
   useEffect(() => {
-    console.log('🚀 Initializing enhanced location service...');
-    
     // Get initial location
     getCurrentLocationEnhanced();
 

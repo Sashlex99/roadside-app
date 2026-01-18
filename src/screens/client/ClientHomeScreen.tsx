@@ -4,17 +4,14 @@ import {
   StyleSheet,
   ActivityIndicator,
   Text,
-  TouchableOpacity,
 } from 'react-native';
 
-import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../contexts/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../../constants/colors';
 import { useNavigation } from '@react-navigation/native';
 import { subscribeToOnlineDriversCount } from '../../services/firestore';
 import { auth } from '../../config/firebase';
-import { checkNetworkConnectivity } from '../../utils/networkUtils';
 
 // New shared components
 import CustomModalComponent from '../../components/shared/CustomModal';
@@ -68,30 +65,6 @@ export default function ClientHomeScreen() {
     setShowRequestModal
   });
 
-  // 🐛 DEBUG: Enhanced logging for bids and modal state
-  useEffect(() => {
-    console.log('🔍 [ClientHomeScreen] Current state:', {
-      activeOrderId: activeOrder?.id,
-      activeOrderStatus: activeOrder?.status,
-      bidsCount: bids.length,
-      showBidsModal,
-      bids: bids.map(bid => ({ 
-        id: bid.id, 
-        price: bid.proposedPrice, 
-        driverName: bid.driverInfo?.name,
-        status: bid.status,
-        isValidBid: !!(bid.id && bid.proposedPrice && bid.driverInfo?.name)
-      })),
-      // Modal state
-      modalProps: {
-        visible: showBidsModal,
-        activeOrderPassed: !!activeOrder,
-        bidsArrayLength: (bids || []).length,
-        locationPassed: !!location
-      }
-    });
-  }, [activeOrder, bids, showBidsModal]);
-  
   // Use client payments hook
   const { 
     paymentModal, 
@@ -113,109 +86,19 @@ export default function ClientHomeScreen() {
   // UI state variables
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
 
-  // ✅ NEW: Network recovery state
-  const [isNetworkOnline, setIsNetworkOnline] = useState(true);
-  const [showNetworkBanner, setShowNetworkBanner] = useState(false);
-
-  // ✅ NEW: Network monitoring function
-  const initializeNetworkMonitoring = () => {
-    let lastNetworkState = true;
-    
-    const checkNetwork = async () => {
-      try {
-        const networkStatus = await checkNetworkConnectivity();
-        const currentNetworkState = networkStatus.isConnected;
-        
-        // ✅ FIXED: Only show banner when state actually changes
-        if (currentNetworkState !== lastNetworkState) {
-          console.log(`🔄 Network state changed: ${lastNetworkState} → ${currentNetworkState}`);
-          
-          setIsNetworkOnline(currentNetworkState);
-          
-          if (currentNetworkState) {
-            // Network came back online
-            console.log('🔗 Network recovered!');
-            setShowNetworkBanner(true);
-            
-            // Hide banner after 3 seconds
-      setTimeout(() => {
-              setShowNetworkBanner(false);
-            }, 3000);
-            
-            // Process any pending offline operations
-            try {
-              const { offlineQueue } = await import('../../utils/networkUtils');
-              await offlineQueue.processQueue();
-              console.log('✅ Offline queue processed');
-            } catch (queueError) {
-              console.warn('⚠️ Failed to process offline queue:', queueError);
-            }
-            
-          } else {
-            // Network went offline
-            console.log('📴 Network went offline');
-            setShowNetworkBanner(true);
-            // ✅ FIXED: Don't auto-hide offline banner - keep it visible until online
-          }
-          
-          lastNetworkState = currentNetworkState;
-        }
-      } catch (error) {
-        console.error('Error checking network status:', error);
-      }
-    };
-    
-    // ✅ FIXED: Reduced interval to 5 seconds for faster detection
-    const interval = setInterval(checkNetwork, 5000);
-    
-    // Initial check
-    checkNetwork();
-    
-    // Return cleanup function
-    return () => {
-      clearInterval(interval);
-    };
-  };
-
+  // Debug: Check Firebase Auth status on load
   useEffect(() => {
-    // ✅ TEMPORARILY DISABLED: Network monitoring conflicts with Firebase connection management
-    // const cleanupNetworkMonitoring = initializeNetworkMonitoring();
-    console.log('⚠️ Network monitoring disabled to prevent app crashes during network recovery');
-
-    // 🔥 EMERGENCY DEBUG: Check Firebase Auth status on load
-    const checkFirebaseAuth = () => {
-      try {
-        console.log('🔐 Firebase Auth Status Check:');
-        console.log('  - Current User:', auth.currentUser ? {
-          uid: auth.currentUser.uid,
-          email: auth.currentUser.email,
-          emailVerified: auth.currentUser.emailVerified
-        } : 'NOT SIGNED IN');
-        console.log('  - App User:', user ? {
-          uid: user.uid,
-          email: user.email,
-          userType: user.userType
-        } : 'NO APP USER');
-        console.log('  - Token Available:', !!token);
-        
-        // If we have app user but no Firebase Auth user, try to sync
-        if (user && !auth.currentUser) {
-          console.log('🔄 App user exists but Firebase Auth missing - this may cause permission errors');
-        }
-      } catch (error) {
-        console.error('❌ Firebase Auth status check failed:', error);
+    if (__DEV__) {
+      const currentUser = auth.currentUser;
+      console.log('[Auth] Status:', {
+        firebaseUser: currentUser ? currentUser.uid : 'NOT SIGNED IN',
+        appUser: user ? user.uid : 'NO APP USER',
+        hasToken: !!token
+      });
+      if (user && !currentUser) {
+        console.log('[Auth] Warning: App user exists but Firebase Auth missing');
       }
-    };
-
-    checkFirebaseAuth();
-    
-    // ✅ DISABLED: Return cleanup function for network monitoring
-    return () => {
-      // if (cleanupNetworkMonitoring) {
-      //   cleanupNetworkMonitoring();
-      // }
-      console.log('🧹 No network monitoring cleanup needed');
-    };
+    }
   }, []);
 
   // Show location error if exists
@@ -248,12 +131,12 @@ export default function ClientHomeScreen() {
     try {
       const unsubscribe = subscribeToOnlineDriversCount((count) => {
         setOnlineDriversCount(count);
-        if (__DEV__) console.log('📊 Online drivers count updated:', count);
+        if (__DEV__) console.log('[Drivers] Online count:', count);
       });
       
       return () => unsubscribe();
     } catch (subscriptionError) {
-      console.error('❌ Error setting up online drivers subscription:', subscriptionError);
+      console.error('[Drivers] Subscription error:', subscriptionError);
       // Set count to 0 on error
       setOnlineDriversCount(0);
     }
@@ -279,23 +162,6 @@ export default function ClientHomeScreen() {
         onSettingsPress={() => setShowSettingsPanel(true)}
       />
 
-      {/* ✅ DISABLED: Network Status Banner - prevented crashes during network recovery */}
-      {false && showNetworkBanner && (
-            <View style={[
-          styles.networkBanner,
-          { backgroundColor: isNetworkOnline ? '#10B981' : '#EF4444' }
-        ]}>
-          <Ionicons 
-            name={isNetworkOnline ? "wifi" : "wifi-outline"} 
-            size={16} 
-            color="white" 
-          />
-          <Text style={styles.networkBannerText}>
-            {isNetworkOnline ? 'Връзката е възстановена' : 'Няма интернет връзка'}
-            </Text>
-          </View>
-      )}
-
       {/* Active Order Panel */}
       {activeOrder && (
         <ActiveOrderPanel
@@ -303,10 +169,7 @@ export default function ClientHomeScreen() {
           bids={bids}
           timeLeftMs={timeLeftMs}
           acceptedDriverName={acceptedDriverName}
-          onShowBids={() => {
-            console.log('🔍 [ClientHomeScreen] onShowBids called - setting showBidsModal to true');
-            setShowBidsModal(true);
-          }}
+          onShowBids={() => setShowBidsModal(true)}
           onCancel={cancelOrder}
           acceptingBid={acceptingBid}
         />
@@ -316,7 +179,7 @@ export default function ClientHomeScreen() {
       <NativeMap
         location={location}
         style={styles.mapContainer}
-        onMapReady={() => console.log('🗺️ Client map loaded')}
+        onMapReady={() => { if (__DEV__) console.log('[Map] Client map loaded'); }}
         onLocatePress={quickLocate}
         variant="client"
       />
@@ -341,10 +204,7 @@ export default function ClientHomeScreen() {
       {/* Bids Modal */}
       <BidsModal
         visible={showBidsModal}
-        onClose={() => {
-          console.log('🔄 [ClientHomeScreen] Closing BidsModal');
-          setShowBidsModal(false);
-        }}
+        onClose={() => setShowBidsModal(false)}
         activeOrder={activeOrder}
         bids={bids || []} // ✅ FIXED: Show all bids - cancelled bids are now restored when payment is cancelled
         location={location}
@@ -408,22 +268,4 @@ const styles = StyleSheet.create({
 
 
 
-  networkBanner: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  networkBannerText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginLeft: 8,
-  },
 }); 
