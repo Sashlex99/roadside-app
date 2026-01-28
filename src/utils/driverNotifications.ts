@@ -1,5 +1,9 @@
 // Driver notification utilities
 // Ensures drivers get notified when their bids are accepted
+//
+// NOTE: This file uses dynamic imports for getBidsForOrder to break
+// the circular dependency: bids.ts -> driverNotifications.ts -> bids.ts
+// Without this, the app can crash during module loading or hot reload.
 
 import {
   doc,
@@ -9,7 +13,8 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
-import { getBidsForOrder } from '../services/firestore/bids';
+// REMOVED static import to break require cycle:
+// import { getBidsForOrder } from '../services/firestore/bids';
 
 /**
  * Ensures a driver gets properly notified when their bid is accepted
@@ -42,6 +47,8 @@ export const ensureDriverNotification = async (
       console.log('🔧 [DRIVER_NOTIFICATION] Order is accepted but missing acceptedDriverId, fixing...');
       
       // Get all bids for this order to find the accepted one
+      // Use dynamic import to break the circular dependency (bids.ts -> driverNotifications.ts -> bids.ts)
+      const { getBidsForOrder } = await import('../services/firestore/bids');
       const bids = await getBidsForOrder(orderId);
       const acceptedBid = bids.find(bid => bid.status === 'accepted');
       
