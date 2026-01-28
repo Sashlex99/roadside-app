@@ -385,43 +385,76 @@ export class LocationService {
   }
 
   private async reverseGeocodeInternal(latitude: number, longitude: number): Promise<string> {
-    try {
-      if (__DEV__) console.log(`[Geocoding] ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
-      
-      const addressResponse = await Location.reverseGeocodeAsync({
-        latitude,
-        longitude,
-      });
+    const maxRetries = 3;
+    let lastError: Error | null = null;
 
-      if (addressResponse.length === 0) {
-        throw new Error('No geocoding results found');
-      }
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        if (__DEV__) console.log(`[Geocoding] Attempt ${attempt}/${maxRetries}: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
 
-      const addr = addressResponse[0];
-      const address = this.formatAddress(addr);
-      
-      // Cache the result
-      if (this.config.cacheAddresses) {
-        const cacheKey = `${latitude.toFixed(5)},${longitude.toFixed(5)}`;
-        this.addressCache.set(cacheKey, { 
-          address, 
-          timestamp: Date.now() 
+        const addressResponse = await Location.reverseGeocodeAsync({
+          latitude,
+          longitude,
         });
-      }
 
-      if (__DEV__) console.log(`[Geocoding] Result: ${address}`);
-      return address;
+        if (addressResponse.length === 0) {
+          throw new Error('No geocoding results found');
+        }
 
-    } catch (error) {
-      console.error('[Geocoding] Failed:', error);
-      
-      // Try alternative geocoding services if available
-      if (this.config.enableFallbacks) {
-        return await this.tryAlternativeGeocoding(latitude, longitude);
+        const addr = addressResponse[0];
+        const address = this.formatAddress(addr);
+
+        // Cache the result
+        if (this.config.cacheAddresses) {
+          const cacheKey = `${latitude.toFixed(5)},${longitude.toFixed(5)}`;
+          this.addressCache.set(cacheKey, {
+            address,
+            timestamp: Date.now()
+          });
+        }
+
+        if (__DEV__) console.log(`[Geocoding] Result: ${address}`);
+        return address;
+
+      } catch (error: any) {
+        lastError = error;
+        const errorMessage = error?.message || String(error);
+
+        // Handle specific Android geocoding error (ijpe unavailable / java.io.IOException)
+        // This error occurs when Google Play Services geocoding service is temporarily unavailable
+        const isAndroidGeocodingError =
+          errorMessage.includes('ijpe') ||
+          errorMessage.includes('java.io') ||
+          errorMessage.includes('IOException') ||
+          errorMessage.includes('unavailable') ||
+          errorMessage.includes('Service not available');
+
+        if (isAndroidGeocodingError) {
+          console.warn(`[Geocoding] Android geocoding service unavailable (attempt ${attempt}/${maxRetries}): ${errorMessage}`);
+
+          if (attempt < maxRetries) {
+            // Exponential backoff: 1s, 2s, 4s
+            const backoffMs = Math.pow(2, attempt - 1) * 1000;
+            if (__DEV__) console.log(`[Geocoding] Retrying in ${backoffMs}ms...`);
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            continue; // Retry
+          }
+        } else {
+          // For other errors, don't retry - fallback immediately
+          console.error('[Geocoding] Non-retryable error:', errorMessage);
+          break;
+        }
       }
-      
-      throw error;
     }
+
+    // All retries failed or non-retryable error - use fallback
+    console.warn('[Geocoding] All retries failed, using fallback address');
+
+    if (this.config.enableFallbacks) {
+      return this.generateFallbackAddress(latitude, longitude);
+    }
+
+    throw lastError || new Error('Geocoding failed after all retries');
   }
 
   private async processLocationUpdate(locationUpdate: Location.LocationObject): Promise<LocationData> {
@@ -466,19 +499,50 @@ export class LocationService {
   }
 
   private generateFallbackAddress(latitude: number, longitude: number): string {
-    // Generate approximate address based on coordinates
+    // Generate approximate address based on coordinates with regional hints
     const latStr = latitude.toFixed(4);
     const lngStr = longitude.toFixed(4);
-    
+
     // Check if coordinates are in Bulgaria (approximate bounds)
-    const isInBulgaria = latitude >= 41.2 && latitude <= 44.2 && 
+    const isInBulgaria = latitude >= 41.2 && latitude <= 44.2 &&
                         longitude >= 22.3 && longitude <= 28.6;
-    
+
     if (isInBulgaria) {
-      return `Координати: ${latStr}, ${lngStr} (България)`;
-    } else {
-      return `Координати: ${latStr}, ${lngStr}`;
+      // Provide regional hint based on coordinates for better user experience
+      let region = 'България';
+
+      // Major cities approximate coordinates
+      if (latitude >= 42.6 && latitude <= 42.8 && longitude >= 23.2 && longitude <= 23.5) {
+        region = 'София';
+      } else if (latitude >= 42.1 && latitude <= 42.2 && longitude >= 24.7 && longitude <= 24.8) {
+        region = 'Пловдив';
+      } else if (latitude >= 43.2 && latitude <= 43.25 && longitude >= 27.9 && longitude <= 28.0) {
+        region = 'Варна';
+      } else if (latitude >= 42.4 && latitude <= 42.5 && longitude >= 27.4 && longitude <= 27.5) {
+        region = 'Бургас';
+      } else if (latitude >= 43.8 && latitude <= 43.9 && longitude >= 25.9 && longitude <= 26.0) {
+        region = 'Русе';
+      } else if (latitude >= 42.4 && latitude <= 42.5 && longitude >= 25.6 && longitude <= 25.7) {
+        region = 'Стара Загора';
+      } else if (latitude >= 43.4 && latitude <= 43.5 && longitude >= 24.6 && longitude <= 24.7) {
+        region = 'Плевен';
+      } else if (latitude >= 42.1 && latitude <= 42.2 && longitude >= 24.3 && longitude <= 24.4) {
+        region = 'Пазарджик';
+      } else {
+        // Regional hints for larger areas
+        if (latitude > 43.0 && longitude < 24.0) region = 'Западна България';
+        else if (latitude > 43.0 && longitude >= 24.0 && longitude < 26.0) region = 'Централна Северна България';
+        else if (latitude > 43.0) region = 'Североизточна България';
+        else if (latitude <= 43.0 && longitude < 24.5) region = 'Югозападна България';
+        else if (latitude <= 43.0 && longitude >= 24.5 && longitude < 26.5) region = 'Южна Централна България';
+        else region = 'Югоизточна България';
+      }
+
+      return `${region} (${latStr}, ${lngStr})`;
     }
+
+    // Outside Bulgaria
+    return `Координати: ${latStr}, ${lngStr}`;
   }
 
   private async tryAlternativeGeocoding(latitude: number, longitude: number): Promise<string> {

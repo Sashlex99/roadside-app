@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../../constants/colors';
 import { ActiveOrder } from '../../../types/client';
 import { StyleSheet } from 'react-native';
+import { ETAResult } from '../../../services/directionsService';
 
 interface ActiveOrderPanelProps {
   activeOrder: ActiveOrder;
@@ -19,6 +20,7 @@ interface ActiveOrderPanelProps {
   onShowBids: () => void;
   onCancel: () => void;
   acceptingBid?: boolean;
+  eta?: ETAResult | null; // ETA from driver to client
 }
 
 // Format milliseconds to M:SS string
@@ -37,6 +39,7 @@ export default function ActiveOrderPanel({
   onShowBids,
   onCancel,
   acceptingBid = false,
+  eta,
 }: ActiveOrderPanelProps) {
   if (!activeOrder) return null;
 
@@ -131,6 +134,14 @@ export default function ActiveOrderPanel({
                 })()}
               </Text>
               <Text style={localStyles.activeOrderAddress}>📍 {activeOrder.destinationLocation?.address || 'Няма зададен адрес'}</Text>
+              {eta && (
+                <View style={localStyles.etaContainer}>
+                  <Ionicons name="time-outline" size={14} color={colors.primary} />
+                  <Text style={localStyles.etaText}>
+                    Очаквано пристигане: {eta.durationText}
+                  </Text>
+                </View>
+              )}
             </View>
             <TouchableOpacity style={localStyles.phoneButton} onPress={handleCallDriver}>
               <Ionicons name="call" size={20} color={colors.textOnPrimary} />
@@ -367,5 +378,21 @@ const localStyles = StyleSheet.create({
   },
   disabledText: {
     color: colors.textSecondary,
+  },
+  etaContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    backgroundColor: colors.primaryLight,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+  },
+  etaText: {
+    fontSize: 13,
+    color: colors.primary,
+    fontWeight: '600',
+    marginLeft: 4,
   },
 }); 

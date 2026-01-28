@@ -22,6 +22,9 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
   // ✅ FIXED: Add ref to track request modal timeout for proper cleanup
   const requestModalTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Track previous order status for detecting status transitions
+  const prevOrderStatusRef = useRef<string | null>(null);
+
   // ✅ FIXED: Cleanup request modal timeout on unmount
   useEffect(() => {
     return () => {
@@ -31,6 +34,50 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
       }
     };
   }, []);
+
+  // -------- Order Status Change Notifications (Completed & Cancelled) --------
+  useEffect(() => {
+    const prevStatus = prevOrderStatusRef.current;
+    const currentStatus = activeOrder?.status;
+
+    // Only process if there was a previous status (skip initial load)
+    if (prevStatus && currentStatus && prevStatus !== currentStatus) {
+      // Detect transition to 'completed'
+      if (currentStatus === 'completed') {
+        console.log('🎉 [Orders] Order completed! Showing notification to client');
+        setCustomModal({
+          visible: true,
+          title: 'Поръчката е завършена',
+          message: 'Благодарим ви, че използвахте нашите услуги! Надяваме се да сте доволни.',
+          icon: 'checkmark-circle',
+          iconColor: '#10B981',
+          buttons: [{
+            text: 'Благодаря!',
+            onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
+          }]
+        });
+      }
+
+      // Detect transition to 'cancelled'
+      if (currentStatus === 'cancelled') {
+        console.log('[Orders] Order cancelled! Showing notification to client');
+        setCustomModal({
+          visible: true,
+          title: 'Поръчката е отказана',
+          message: 'Поръчката беше отменена. Можете да създадете нова заявка ако все още имате нужда от помощ.',
+          icon: 'information-circle-outline',
+          iconColor: colors.textSecondary,
+          buttons: [{
+            text: 'Разбрах',
+            onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
+          }]
+        });
+      }
+    }
+
+    // Update previous status ref (always, even on initial load)
+    prevOrderStatusRef.current = currentStatus || null;
+  }, [activeOrder?.status, setCustomModal]);
 
   // -------- Real-time order subscription --------
   useEffect(() => {

@@ -56,10 +56,22 @@ export function useDriverTracking(activeOrder: ActiveOrder | null): LocationData
       (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data();
+
+          // Handle both old format (flat) and new format (nested location object)
+          const latitude = data.location?.latitude ?? data.latitude;
+          const longitude = data.location?.longitude ?? data.longitude;
+          const address = data.location?.address ?? data.address ?? '';
+
+          if (!latitude || !longitude) {
+            console.log('⚠️ Driver location data incomplete');
+            setDriverLocation(null);
+            return;
+          }
+
           const newLocation: LocationData = {
-            latitude: data.latitude,
-            longitude: data.longitude,
-            address: data.address || '',
+            latitude,
+            longitude,
+            address,
           };
 
           setDriverLocation(newLocation);

@@ -32,6 +32,7 @@ import { PendingOrder } from '../../types/driver';
 import { useCurrentLocation } from '../../hooks/shared/useCurrentLocation';
 import { useDriverOrders } from '../../hooks/driver/useDriverOrders';
 import { useDriverStatus } from '../../hooks/driver/useDriverStatus';
+import { useDriverLocationPublisher } from '../../hooks/driver/useDriverLocationPublisher';
 
 // Helpers
 import { shouldShowOrdersModal, makePhoneCall, openGoogleMaps } from '../../utils/driver/helpers';
@@ -88,6 +89,21 @@ export default function DriverHomeScreen() {
     handleRadiusSelect,
     filterOrdersByRadius
   } = useDriverStatus({ user, authReady, location, setCustomModal });
+
+  // Use driver location publisher hook - publishes location every 10s when online
+  const { isPublishing } = useDriverLocationPublisher({
+    driverId: user?.uid || null,
+    isOnline,
+    location,
+    activeOrderId: acceptedOrder?.id || null
+  });
+
+  // Log publishing status in dev mode
+  useEffect(() => {
+    if (__DEV__ && isPublishing) {
+      console.log('📍 [DriverHome] Location publishing active');
+    }
+  }, [isPublishing]);
 
   // Show location error if exists
   useEffect(() => {

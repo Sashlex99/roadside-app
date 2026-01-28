@@ -112,7 +112,7 @@ export function useClientPayments({
       successModalTimeoutRef.current = setTimeout(() => {
         setCustomModal({
           visible: true,
-          title: '✅ Плащането е успешно!',
+          title: 'Плащането е успешно!',
           message: 'Поръчката е потвърдена. Шофьорът ще се свърже с вас скоро.',
           icon: 'checkmark-circle',
           iconColor: '#10B981',
@@ -188,7 +188,7 @@ export function useClientPayments({
 
         setCustomModal({
           visible: true,
-          title: '✅ Плащането е успешно!',
+          title: 'Плащането е успешно!',
           message: amount
             ? `Платихте ${parseFloat(amount).toFixed(2)} EUR платформена такса. Шофьорът ще се свърже с вас скоро.`
             : 'Поръчката е потвърдена. Шофьорът ще се свърже с вас скоро.',
@@ -500,7 +500,7 @@ export function useClientPayments({
         // Show success modal
         setCustomModal({
           visible: true,
-          title: '✅ Плащането е успешно!',
+          title: 'Плащането е успешно!',
           message: 'Поръчката е потвърдена. Шофьорът ще се свърже с вас скоро.',
           icon: 'checkmark-circle',
           iconColor: '#10B981',

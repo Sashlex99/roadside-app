@@ -352,6 +352,238 @@ cd ..
 npx expo start --dev-client --tunnel
 ```
 
+### 2026-01-28 (Client Information & Driver Tracking Features)
+
+Major update adding real-time driver tracking, nearby drivers visualization, ETA calculation, and improved client notifications.
+
+#### Simple Fixes Implemented
+
+1. **Removed emoji from payment success modal:**
+   - Changed `'✅ Плащането е успешно!'` → `'Плащането е успешно!'`
+   - File: `src/hooks/client/useClientPayments.ts` (lines 115, 192, 503)
+   - Cleaner, more professional UI
+
+2. **Order completion notification:**
+   - Client sees "Поръчката е завършена" modal when driver taps Complete
+   - Uses `checkmark-circle` icon with green color
+   - File: `src/hooks/client/useClientOrders.ts`
+   - Tracks previous status with `useRef` to detect `completed` transition
+
+3. **Order cancellation notification:**
+   - Client sees "Поръчката е отказана" modal when order is cancelled
+   - Uses `information-circle-outline` icon with neutral color (clean design, no red X)
+   - Same message regardless of who cancelled (driver or client)
+   - File: `src/hooks/client/useClientOrders.ts`
+
+#### Complex Features Implemented
+
+##### 1. Driver Location Publishing System
+**Purpose:** Enables drivers to broadcast their location so clients can see available drivers on the map.
+
+**New file:** `src/hooks/driver/useDriverLocationPublisher.ts`
+```typescript
+// Usage in DriverHomeScreen:
+useDriverLocationPublisher({
+  driverId: user?.uid || null,
+  isOnline,
+  location,
+  activeOrderId: acceptedOrder?.id || null
+});
+```
+
+**Behavior:**
+- Publishes location every 10 seconds when driver is online
+- Stores in `driverLocations/{driverId}` collection with:
+  - `location: { latitude, longitude, address }`
+  - `isOnline: true/false`
+  - `timestamp: Date`
+  - `orderId` (if driver has active order)
+- Marks driver as offline (`isOnline: false`) when going offline
+- Handles app backgrounding gracefully
+- Auto-publishes on app returning to foreground
+
+**Files modified:**
+- `src/types/firestore.ts` - Added `isOnline?: boolean` to `DriverLocation` interface
+- `src/screens/driver/DriverHomeScreen.tsx` - Integrated the hook
+
+##### 2. Nearby Drivers Map Display
+**Purpose:** Shows clients all online drivers within 50km radius as orange tow truck markers.
+
+**New files:**
+- `src/hooks/client/useNearbyDrivers.ts` - Hook for subscribing to nearby drivers
+- `src/services/firestore/locations.ts` - Added `subscribeToNearbyDrivers()` function
+
+**Implementation details:**
+```typescript
+// In ClientHomeScreen:
+const { nearbyDrivers } = useNearbyDrivers({
+  clientLocation: location,
+  radiusKm: 50,
+  enabled: !activeOrder // Disabled when client has active order
+});
+
+// Pass to NativeMap:
+<NativeMap nearbyDrivers={nearbyDrivers} ... />
+```
+
+**How it works:**
+1. Queries Firestore for drivers where `isOnline === true`
+2. Filters to only include drivers active in last 2 minutes (prevents stale data)
+3. Calculates Haversine distance client-side to filter by 50km radius
+4. Returns array of `DriverLocation` objects
+5. NativeMap renders orange markers (car-sport icon) for each driver
+
+**Files modified:**
+- `src/components/shared/NativeMap.tsx` - Added `nearbyDrivers` prop and marker rendering
+- `src/screens/client/ClientHomeScreen.tsx` - Integrated the hook
+
+**Marker style (in NativeMap):**
+```typescript
+towTruckMarker: {
+  width: 32, height: 32, borderRadius: 16,
+  backgroundColor: '#FF9800', // Orange
+  borderWidth: 2, borderColor: 'white'
+}
+```
+
+##### 3. Real-time Driver Tracking During Orders
+**Purpose:** Shows client the driver's live location on map when order is accepted.
+
+**Files modified:**
+- `src/hooks/client/useDriverTracking.ts` - Fixed to handle new location structure
+- `src/screens/client/ClientHomeScreen.tsx` - Wired up the hook
+
+**Implementation:**
+```typescript
+// In ClientHomeScreen:
+const driverLocation = useDriverTracking(activeOrder);
+
+<NativeMap
+  driverLocation={driverLocation}
+  showDriverMarker={!!driverLocation && (activeOrder?.status === 'accepted' || activeOrder?.status === 'in_progress')}
+  ...
+/>
+```
+
+**How it works:**
+1. `useDriverTracking` subscribes to `driverLocations/{acceptedDriverId}`
+2. Only tracks when order status is `accepted` or `in_progress`
+3. Updates `driverLocation` state in real-time via `onSnapshot`
+4. NativeMap shows green car marker at driver's position
+5. Subscription cleans up when order completes/cancels
+
+##### 4. ETA (Estimated Time of Arrival) Display
+**Purpose:** Shows client how long until driver arrives.
+
+**New files:**
+- `src/services/directionsService.ts` - Google Directions API integration
+- `src/hooks/client/useDriverETA.ts` - Hook for calculating and refreshing ETA
+
+**directionsService.ts features:**
+- `getETA(origin, destination)` - Fetches real ETA from Google Directions API
+- `getEstimatedETA(origin, destination)` - Fallback using Haversine distance + 40km/h average speed
+- Returns `{ durationMinutes, durationText, distanceKm, distanceText }`
+- Bulgarian text formatting: "5 мин", "1 час 15 мин", etc.
+- Automatic fallback if API fails or no API key
+
+**useDriverETA hook:**
+```typescript
+const { eta } = useDriverETA({
+  driverLocation,
+  clientLocation: location,
+  enabled: !!driverLocation && (activeOrder?.status === 'accepted' || activeOrder?.status === 'in_progress')
+});
+```
+
+**Behavior:**
+- Fetches ETA immediately when driver location available
+- Refreshes every 30 seconds
+- Skips refresh if driver hasn't moved significantly (>50m)
+- Uses Google Directions API with Bulgarian language
+
+**Display in ActiveOrderPanel:**
+```typescript
+{eta && (
+  <View style={localStyles.etaContainer}>
+    <Ionicons name="time-outline" size={14} color={colors.primary} />
+    <Text style={localStyles.etaText}>
+      Очаквано пристигане: {eta.durationText}
+    </Text>
+  </View>
+)}
+```
+
+**Files modified:**
+- `src/components/client/ActiveOrderPanel/index.tsx` - Added `eta` prop and display
+- `src/screens/client/ClientHomeScreen.tsx` - Integrated hook and passed to panel
+
+##### 5. Enhanced Geocoding Error Handling
+**Purpose:** Better handling of intermittent Android geocoding failures.
+
+**File:** `src/services/locationService.ts`
+
+**Changes to `reverseGeocodeInternal()`:**
+- Added retry logic with exponential backoff (1s, 2s, 4s delays)
+- Specifically catches `ijpe unavailable` and `java.io.IOException` errors
+- Retries up to 3 times before falling back
+- Non-retryable errors fallback immediately
+
+**Enhanced fallback addresses:**
+- Now provides Bulgarian regional hints based on coordinates:
+  - Major cities: "София", "Пловдив", "Варна", "Бургас", "Русе", etc.
+  - Regional areas: "Западна България", "Южна Централна България", etc.
+- Format: "София (42.6977, 23.3219)" instead of just coordinates
+
+#### New Files Created
+| File | Purpose |
+|------|---------|
+| `src/hooks/driver/useDriverLocationPublisher.ts` | Driver location broadcasting |
+| `src/hooks/client/useNearbyDrivers.ts` | Subscribe to nearby drivers |
+| `src/hooks/client/useDriverETA.ts` | Calculate ETA from driver to client |
+| `src/services/directionsService.ts` | Google Directions API wrapper |
+
+#### Files Modified
+| File | Changes |
+|------|---------|
+| `src/hooks/client/useClientPayments.ts` | Removed emoji from success title |
+| `src/hooks/client/useClientOrders.ts` | Added completion/cancellation notifications |
+| `src/hooks/client/useDriverTracking.ts` | Fixed location structure handling |
+| `src/services/locationService.ts` | Added retry logic, enhanced fallbacks |
+| `src/services/firestore/locations.ts` | Added `subscribeToNearbyDrivers()` |
+| `src/types/firestore.ts` | Added `isOnline` to DriverLocation |
+| `src/components/shared/NativeMap.tsx` | Added `nearbyDrivers` prop, tow truck markers |
+| `src/components/client/ActiveOrderPanel/index.tsx` | Added `eta` prop and display |
+| `src/screens/client/ClientHomeScreen.tsx` | Integrated all new hooks |
+| `src/screens/driver/DriverHomeScreen.tsx` | Integrated location publisher |
+
+#### Architecture Notes
+
+**Data flow for nearby drivers:**
+```
+Driver goes online → useDriverLocationPublisher starts →
+Location published to driverLocations/{id} every 10s →
+Client's useNearbyDrivers subscribes with onSnapshot →
+Filter by isOnline=true, timestamp<2min, distance<50km →
+NativeMap renders orange markers
+```
+
+**Data flow for driver tracking during order:**
+```
+Client accepts bid → Order status = 'accepted' →
+useDriverTracking subscribes to driverLocations/{acceptedDriverId} →
+Driver publishes location every 10s →
+useDriverETA calculates route time via Google Directions API →
+ActiveOrderPanel shows "Очаквано пристигане: X мин" →
+NativeMap shows green driver marker
+```
+
+#### Testing Notes
+- **Nearby drivers:** Open client app, have a driver go online nearby - orange marker should appear
+- **Driver tracking:** Accept a bid, driver should appear as green marker on client's map
+- **ETA:** Check ActiveOrderPanel shows "Очаквано пристигане: X мин" after bid accepted
+- **Notifications:** Complete/cancel order from driver - client should see modal
+- **Geocoding:** Should work without crashes on Android, falls back gracefully
+
 ---
 
 *This file tracks context for Claude Code sessions. Update as the project evolves.*

@@ -4,10 +4,12 @@ import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../constants/colors';
 import { LocationData } from '../../types/shared';
+import { DriverLocation } from '../../types/firestore';
 
 interface NativeMapProps {
   location: LocationData | null;
-  driverLocation?: LocationData | null;  // For real-time driver tracking
+  driverLocation?: LocationData | null;  // For real-time driver tracking during active order
+  nearbyDrivers?: DriverLocation[];  // Array of nearby online drivers to display
   style?: any;
   onMapReady?: () => void;
   onLocatePress?: () => Promise<LocationData | void> | void;  // Callback for locate button press
@@ -62,6 +64,7 @@ const cleanMapStyle = [
 export default function NativeMap({
   location,
   driverLocation,
+  nearbyDrivers,
   style,
   onMapReady,
   onLocatePress,
@@ -205,6 +208,23 @@ export default function NativeMap({
             </View>
           </Marker>
         )}
+
+        {/* Nearby Online Drivers (tow truck icons for available drivers) */}
+        {nearbyDrivers?.map((driver) => (
+          <Marker
+            key={driver.driverId}
+            coordinate={{
+              latitude: driver.location.latitude,
+              longitude: driver.location.longitude,
+            }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+          >
+            <View style={styles.towTruckMarker}>
+              <Ionicons name="car-sport" size={16} color="white" />
+            </View>
+          </Marker>
+        ))}
       </MapView>
 
       {/* Locate Me Button */}
@@ -317,6 +337,21 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
+  },
+  towTruckMarker: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FF9800', // Orange color for tow trucks
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 4,
   },
   locateButton: {
     position: 'absolute',

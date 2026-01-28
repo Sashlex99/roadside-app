@@ -176,6 +176,7 @@ export interface DriverLocation {
   location: OrderLocation;
   heading?: number; // посока на движение
   speed?: number; // скорост км/ч
+  isOnline?: boolean; // дали шофьорът е онлайн и може да получава поръчки
   timestamp: Date;
 }
 

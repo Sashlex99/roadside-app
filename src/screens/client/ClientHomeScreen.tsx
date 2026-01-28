@@ -32,6 +32,9 @@ import { LocationData, CustomModal as CustomModalType } from '../../types/shared
 import { useCurrentLocation } from '../../hooks/shared/useCurrentLocation';
 import { useClientOrders } from '../../hooks/client/useClientOrders';
 import { useClientPayments } from '../../hooks/client/useClientPayments';
+import { useNearbyDrivers } from '../../hooks/client/useNearbyDrivers';
+import { useDriverTracking } from '../../hooks/client/useDriverTracking';
+import { useDriverETA } from '../../hooks/client/useDriverETA';
 import { generateMapHTML, formatTimeRemaining, createCancelOrderHandler } from '../../utils/client/helpers';
 
 export default function ClientHomeScreen() {
@@ -85,6 +88,24 @@ export default function ClientHomeScreen() {
   
   // UI state variables
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+
+  // Subscribe to nearby online drivers (50km radius)
+  // Only show when there's no active order (don't clutter map during order)
+  const { nearbyDrivers } = useNearbyDrivers({
+    clientLocation: location,
+    radiusKm: 50,
+    enabled: !activeOrder // Disable when there's an active order
+  });
+
+  // Track driver location in real-time when order is accepted
+  const driverLocation = useDriverTracking(activeOrder);
+
+  // Calculate ETA from driver to client
+  const { eta } = useDriverETA({
+    driverLocation,
+    clientLocation: location,
+    enabled: !!driverLocation && (activeOrder?.status === 'accepted' || activeOrder?.status === 'in_progress')
+  });
 
   // Debug: Check Firebase Auth status on load
   useEffect(() => {
@@ -172,12 +193,16 @@ export default function ClientHomeScreen() {
           onShowBids={() => setShowBidsModal(true)}
           onCancel={cancelOrder}
           acceptingBid={acceptingBid}
+          eta={eta}
         />
       )}
 
       {/* Map Background - Google Maps */}
       <NativeMap
         location={location}
+        driverLocation={driverLocation}
+        nearbyDrivers={nearbyDrivers}
+        showDriverMarker={!!driverLocation && (activeOrder?.status === 'accepted' || activeOrder?.status === 'in_progress')}
         style={styles.mapContainer}
         onMapReady={() => { if (__DEV__) console.log('[Map] Client map loaded'); }}
         onLocatePress={quickLocate}
