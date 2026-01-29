@@ -29,8 +29,21 @@ export function useDriverTracking(activeOrder: ActiveOrder | null): LocationData
   const [driverLocation, setDriverLocation] = useState<LocationData | null>(null);
 
   useEffect(() => {
+    // Debug: Log order state for tracking diagnosis
+    if (__DEV__) {
+      console.log('🔍 [DriverTracking] Order state:', {
+        hasOrder: !!activeOrder,
+        orderId: activeOrder?.id,
+        status: activeOrder?.status,
+        acceptedDriverId: activeOrder?.acceptedDriverId || 'NOT SET'
+      });
+    }
+
     // Only track when order is accepted and we have a driver ID
     if (!activeOrder?.acceptedDriverId) {
+      if (__DEV__ && activeOrder?.status === 'accepted') {
+        console.warn('⚠️ [DriverTracking] Order is accepted but acceptedDriverId is missing!');
+      }
       setDriverLocation(null);
       return;
     }

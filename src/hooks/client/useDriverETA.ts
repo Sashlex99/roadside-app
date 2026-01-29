@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { getETA, ETAResult } from '../../services/directionsService';
+import { getRouteWithETA, ETAResult, Coordinates } from '../../services/directionsService';
 import { LocationData } from '../../types/shared';
 
 interface UseDriverETAParams {
@@ -16,6 +16,7 @@ interface UseDriverETAParams {
 
 interface UseDriverETAReturn {
   eta: ETAResult | null;
+  routeCoordinates: Coordinates[] | null;
   isLoading: boolean;
   error: string | null;
   lastUpdated: Date | null;
@@ -30,6 +31,7 @@ export function useDriverETA({
   refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS
 }: UseDriverETAParams): UseDriverETAReturn {
   const [eta, setEta] = useState<ETAResult | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -57,6 +59,7 @@ export function useDriverETA({
     // Don't fetch if disabled or missing locations
     if (!enabled || !driverLocation || !clientLocation) {
       setEta(null);
+      setRouteCoordinates(null);
       setIsLoading(false);
       return;
     }
@@ -79,13 +82,14 @@ export function useDriverETA({
       setError(null);
 
       try {
-        const result = await getETA(
+        const result = await getRouteWithETA(
           { latitude: driverLocation.latitude, longitude: driverLocation.longitude },
           { latitude: clientLocation.latitude, longitude: clientLocation.longitude }
         );
 
         if (result) {
           setEta(result);
+          setRouteCoordinates(result.routeCoordinates || null);
           setLastUpdated(new Date());
           lastFetchRef.current = {
             driverLat: driverLocation.latitude,
@@ -93,7 +97,7 @@ export function useDriverETA({
           };
 
           if (__DEV__) {
-            console.log(`📍 [useDriverETA] Updated: ${result.durationText}`);
+            console.log(`📍 [useDriverETA] Updated: ${result.durationText}, route: ${result.routeCoordinates?.length || 0} points`);
           }
         }
       } catch (err) {
@@ -128,6 +132,7 @@ export function useDriverETA({
 
   return {
     eta,
+    routeCoordinates,
     isLoading,
     error,
     lastUpdated

@@ -17,6 +17,7 @@ export interface ETAResult {
   durationText: string;
   distanceKm: number;
   distanceText: string;
+  routeCoordinates?: Coordinates[]; // Polyline points for drawing route on map
 }
 
 export interface Coordinates {
@@ -161,4 +162,121 @@ const formatDistance = (km: number): string => {
     return `${meters} м`;
   }
   return `${km.toFixed(1)} км`;
+};
+
+/**
+ * Decode Google Maps encoded polyline string to array of coordinates
+ * Based on the algorithm from: https://developers.google.com/maps/documentation/utilities/polylinealgorithm
+ */
+export const decodePolyline = (encoded: string): Coordinates[] => {
+  const coordinates: Coordinates[] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    // Decode latitude
+    let shift = 0;
+    let result = 0;
+    let byte: number;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    const deltaLat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += deltaLat;
+
+    // Decode longitude
+    shift = 0;
+    result = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+    const deltaLng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += deltaLng;
+
+    coordinates.push({
+      latitude: lat / 1e5,
+      longitude: lng / 1e5
+    });
+  }
+
+  return coordinates;
+};
+
+/**
+ * Get route with ETA between two coordinates using Google Directions API
+ * Returns both ETA info and route polyline for drawing on map
+ */
+export const getRouteWithETA = async (
+  origin: Coordinates,
+  destination: Coordinates
+): Promise<ETAResult | null> => {
+  if (!GOOGLE_MAPS_API_KEY) {
+    console.warn('[Directions] No Google Maps API key configured');
+    return getEstimatedETAWithRoute(origin, destination);
+  }
+
+  try {
+    const url = `https://maps.googleapis.com/maps/api/directions/json?` +
+      `origin=${origin.latitude},${origin.longitude}&` +
+      `destination=${destination.latitude},${destination.longitude}&` +
+      `mode=driving&` +
+      `language=bg&` +
+      `key=${GOOGLE_MAPS_API_KEY}`;
+
+    if (__DEV__) {
+      console.log('[Directions] Fetching route with ETA...');
+    }
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.status === 'OK' && data.routes.length > 0) {
+      const route = data.routes[0];
+      const leg = route.legs[0];
+
+      // Decode the overview polyline
+      const routeCoordinates = route.overview_polyline?.points
+        ? decodePolyline(route.overview_polyline.points)
+        : [origin, destination]; // Fallback to straight line
+
+      const result: ETAResult = {
+        durationMinutes: Math.ceil(leg.duration.value / 60),
+        durationText: leg.duration.text,
+        distanceKm: leg.distance.value / 1000,
+        distanceText: leg.distance.text,
+        routeCoordinates
+      };
+
+      if (__DEV__) {
+        console.log(`[Directions] Route: ${result.durationText} (${result.distanceText}), ${routeCoordinates.length} points`);
+      }
+
+      return result;
+    } else {
+      console.warn('[Directions] API returned status:', data.status);
+      return getEstimatedETAWithRoute(origin, destination);
+    }
+  } catch (error) {
+    console.error('[Directions] Error fetching route:', error);
+    return getEstimatedETAWithRoute(origin, destination);
+  }
+};
+
+/**
+ * Fallback: Create straight-line route with estimated ETA
+ */
+const getEstimatedETAWithRoute = (
+  origin: Coordinates,
+  destination: Coordinates
+): ETAResult => {
+  const baseETA = getEstimatedETA(origin, destination);
+  return {
+    ...baseETA,
+    routeCoordinates: [origin, destination] // Straight line fallback
+  };
 };

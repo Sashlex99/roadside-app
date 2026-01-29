@@ -1,15 +1,20 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Platform, TouchableOpacity } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import { View, Text, StyleSheet, ActivityIndicator, Platform, TouchableOpacity, Image } from 'react-native';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../constants/colors';
 import { LocationData } from '../../types/shared';
 import { DriverLocation } from '../../types/firestore';
+import { Coordinates } from '../../services/directionsService';
+import towTruckGreen from '../../../assets/towtruck_green.png';
+import towTruckOrange from '../../../assets/towtruck_orange.png';
 
 interface NativeMapProps {
   location: LocationData | null;
   driverLocation?: LocationData | null;  // For real-time driver tracking during active order
   nearbyDrivers?: DriverLocation[];  // Array of nearby online drivers to display
+  routeCoordinates?: Coordinates[] | null;  // Route polyline from driver to client
+  connectedDriverId?: string | null;  // ID of the connected/accepted driver (renders green instead of orange)
   style?: any;
   onMapReady?: () => void;
   onLocatePress?: () => Promise<LocationData | void> | void;  // Callback for locate button press
@@ -65,6 +70,8 @@ export default function NativeMap({
   location,
   driverLocation,
   nearbyDrivers,
+  routeCoordinates,
+  connectedDriverId,
   style,
   onMapReady,
   onLocatePress,
@@ -77,6 +84,22 @@ export default function NativeMap({
   const [isLoading, setIsLoading] = useState(true);
   const [mapReady, setMapReady] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+
+  // Debug: Log driver marker conditions
+  useEffect(() => {
+    if (__DEV__) {
+      const connectedInNearby = nearbyDrivers?.find(d => d.driverId === connectedDriverId);
+      const nearbyDriverIds = nearbyDrivers?.map(d => d.driverId) || [];
+      console.log('🗺️ [NativeMap] Driver marker debug:', {
+        connectedDriverId: connectedDriverId || 'NOT SET',
+        nearbyDriversCount: nearbyDrivers?.length || 0,
+        nearbyDriverIds,
+        connectedDriverInNearby: !!connectedInNearby,
+        showDriverMarker,
+        hasDriverLocation: !!driverLocation
+      });
+    }
+  }, [showDriverMarker, driverLocation, connectedDriverId, nearbyDrivers]);
 
   // Handle locate button press
   const handleLocatePress = async () => {
@@ -203,28 +226,60 @@ export default function NativeMap({
             anchor={{ x: 0.5, y: 0.5 }}
             tracksViewChanges={false}
           >
-            <View style={styles.driverMarker}>
-              <Ionicons name="car" size={18} color="white" />
-            </View>
+            <Image source={towTruckGreen} style={styles.towTruckIcon} />
           </Marker>
         )}
 
-        {/* Nearby Online Drivers (tow truck icons for available drivers) */}
-        {nearbyDrivers?.map((driver) => (
-          <Marker
-            key={driver.driverId}
-            coordinate={{
-              latitude: driver.location.latitude,
-              longitude: driver.location.longitude,
-            }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
-          >
-            <View style={styles.towTruckMarker}>
-              <Ionicons name="car-sport" size={16} color="white" />
-            </View>
-          </Marker>
-        ))}
+        {/* Nearby Online Drivers (tow truck icons) */}
+        {/* When connected: only show the connected driver (green) */}
+        {/* When not connected: show all nearby drivers (orange) */}
+        {(() => {
+          // Check if connected driver exists in nearby drivers list
+          const connectedDriverInList = connectedDriverId
+            ? nearbyDrivers?.some(d => d.driverId === connectedDriverId)
+            : false;
+
+          return nearbyDrivers?.map((driver) => {
+            const isConnectedDriver = connectedDriverId && driver.driverId === connectedDriverId;
+
+            // When we have a connected driver AND they're in the list, hide all OTHER drivers
+            if (connectedDriverId && connectedDriverInList && !isConnectedDriver) {
+              return null;
+            }
+
+            // Skip connected driver in nearbyDrivers if we have separate driverLocation tracking
+            // This avoids duplicate markers
+            if (isConnectedDriver && showDriverMarker && driverLocation) {
+              return null;
+            }
+
+            return (
+              <Marker
+                key={driver.driverId}
+                coordinate={{
+                  latitude: driver.location.latitude,
+                  longitude: driver.location.longitude,
+                }}
+                anchor={{ x: 0.5, y: 0.5 }}
+                tracksViewChanges={false}
+              >
+                <Image
+                  source={isConnectedDriver ? towTruckGreen : towTruckOrange}
+                  style={styles.towTruckIcon}
+                />
+              </Marker>
+            );
+          });
+        })()}
+
+        {/* Route polyline from driver to client */}
+        {routeCoordinates && routeCoordinates.length > 1 && (
+          <Polyline
+            coordinates={routeCoordinates}
+            strokeColor="#FF9800"
+            strokeWidth={3}
+          />
+        )}
       </MapView>
 
       {/* Locate Me Button */}
@@ -323,35 +378,10 @@ const styles = StyleSheet.create({
     top: -8,
     left: -8,
   },
-  driverMarker: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#4CAF50',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: 'white',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  towTruckMarker: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#FF9800', // Orange color for tow trucks
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: 'white',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3,
-    elevation: 4,
+  towTruckIcon: {
+    width: 40,
+    height: 40,
+    resizeMode: 'contain',
   },
   locateButton: {
     position: 'absolute',

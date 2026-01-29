@@ -1,12 +1,36 @@
 /**
  * Enhanced Location Service with Phase 4 Circuit Breaker Protection
  * Critical for roadside assistance app - handles GPS and geocoding failures gracefully
+ *
+ * Now uses Google Geocoding API as primary with expo-location as fallback
  */
 
 import * as Location from 'expo-location';
+import Constants from 'expo-constants';
 import { executeWithCircuitBreaker } from '../utils/circuitBreakerInstances';
 import { withTimeout, TimeoutError } from '../utils/timeoutUtils';
 import { sendHealthAlert } from '../utils/alertingSystem';
+
+// Get Google Maps API key from config
+const GOOGLE_MAPS_API_KEY =
+  Constants.expoConfig?.ios?.config?.googleMapsApiKey ||
+  Constants.expoConfig?.android?.config?.googleMaps?.apiKey ||
+  Constants.expoConfig?.extra?.googleMapsApiKey ||
+  '';
+
+// Debug: Log API key status on load
+if (__DEV__) {
+  console.log('[LocationService] Google API Key status:', {
+    hasKey: !!GOOGLE_MAPS_API_KEY,
+    keyLength: GOOGLE_MAPS_API_KEY?.length || 0,
+    keyPrefix: GOOGLE_MAPS_API_KEY ? GOOGLE_MAPS_API_KEY.substring(0, 8) + '...' : 'NONE',
+    sources: {
+      ios: !!Constants.expoConfig?.ios?.config?.googleMapsApiKey,
+      android: !!Constants.expoConfig?.android?.config?.googleMaps?.apiKey,
+      extra: !!Constants.expoConfig?.extra?.googleMapsApiKey
+    }
+  });
+}
 
 export interface LocationData {
   latitude: number;
@@ -384,13 +408,67 @@ export class LocationService {
     return result;
   }
 
-  private async reverseGeocodeInternal(latitude: number, longitude: number): Promise<string> {
+  /**
+   * Reverse geocode using Google Geocoding API
+   * More reliable than device-native geocoding
+   */
+  private async reverseGeocodeWithGoogleAPI(latitude: number, longitude: number): Promise<string | null> {
+    if (!GOOGLE_MAPS_API_KEY) {
+      if (__DEV__) console.log('[Geocoding] No Google API key, skipping Google Geocoding API');
+      return null;
+    }
+
+    try {
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?` +
+        `latlng=${latitude},${longitude}&` +
+        `language=bg&` +
+        `key=${GOOGLE_MAPS_API_KEY}`;
+
+      if (__DEV__) console.log(`[Geocoding] Google API: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.status === 'OK' && data.results && data.results.length > 0) {
+        // Get the most specific result (usually first one)
+        const result = data.results[0];
+        const address = result.formatted_address;
+
+        if (__DEV__) console.log(`[Geocoding] Google API result: ${address}`);
+        return address;
+      } else if (data.status === 'REQUEST_DENIED') {
+        // Log full error for debugging
+        console.warn('[Geocoding] Google Geocoding API REQUEST_DENIED:', {
+          error_message: data.error_message,
+          status: data.status,
+          apiKeyPresent: !!GOOGLE_MAPS_API_KEY,
+          apiKeyLength: GOOGLE_MAPS_API_KEY?.length || 0,
+          apiKeyPrefix: GOOGLE_MAPS_API_KEY?.substring(0, 10) + '...'
+        });
+        return null;
+      } else if (data.status === 'ZERO_RESULTS') {
+        if (__DEV__) console.log('[Geocoding] Google API: No results for location');
+        return null;
+      } else {
+        console.warn('[Geocoding] Google API returned status:', data.status, data.error_message);
+        return null;
+      }
+    } catch (error) {
+      console.warn('[Geocoding] Google API error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Reverse geocode using expo-location (device native)
+   * Used as fallback when Google API is unavailable
+   */
+  private async reverseGeocodeWithExpoLocation(latitude: number, longitude: number): Promise<string | null> {
     const maxRetries = 3;
-    let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        if (__DEV__) console.log(`[Geocoding] Attempt ${attempt}/${maxRetries}: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
+        if (__DEV__) console.log(`[Geocoding] Expo attempt ${attempt}/${maxRetries}`);
 
         const addressResponse = await Location.reverseGeocodeAsync({
           latitude,
@@ -398,63 +476,76 @@ export class LocationService {
         });
 
         if (addressResponse.length === 0) {
-          throw new Error('No geocoding results found');
+          return null;
         }
 
         const addr = addressResponse[0];
-        const address = this.formatAddress(addr);
-
-        // Cache the result
-        if (this.config.cacheAddresses) {
-          const cacheKey = `${latitude.toFixed(5)},${longitude.toFixed(5)}`;
-          this.addressCache.set(cacheKey, {
-            address,
-            timestamp: Date.now()
-          });
-        }
-
-        if (__DEV__) console.log(`[Geocoding] Result: ${address}`);
-        return address;
+        return this.formatAddress(addr);
 
       } catch (error: any) {
-        lastError = error;
         const errorMessage = error?.message || String(error);
 
-        // Handle specific Android geocoding error (ijpe unavailable / java.io.IOException)
-        // This error occurs when Google Play Services geocoding service is temporarily unavailable
-        const isAndroidGeocodingError =
+        // Handle specific Android geocoding error
+        const isRetryable =
           errorMessage.includes('ijpe') ||
           errorMessage.includes('java.io') ||
           errorMessage.includes('IOException') ||
-          errorMessage.includes('unavailable') ||
-          errorMessage.includes('Service not available');
+          errorMessage.includes('unavailable');
 
-        if (isAndroidGeocodingError) {
-          console.warn(`[Geocoding] Android geocoding service unavailable (attempt ${attempt}/${maxRetries}): ${errorMessage}`);
-
-          if (attempt < maxRetries) {
-            // Exponential backoff: 1s, 2s, 4s
-            const backoffMs = Math.pow(2, attempt - 1) * 1000;
-            if (__DEV__) console.log(`[Geocoding] Retrying in ${backoffMs}ms...`);
-            await new Promise(resolve => setTimeout(resolve, backoffMs));
-            continue; // Retry
-          }
-        } else {
-          // For other errors, don't retry - fallback immediately
-          console.error('[Geocoding] Non-retryable error:', errorMessage);
-          break;
+        if (isRetryable && attempt < maxRetries) {
+          const backoffMs = Math.pow(2, attempt - 1) * 1000;
+          if (__DEV__) console.log(`[Geocoding] Expo retry in ${backoffMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          continue;
         }
+
+        console.warn('[Geocoding] Expo geocoding failed:', errorMessage);
+        return null;
       }
     }
 
-    // All retries failed or non-retryable error - use fallback
-    console.warn('[Geocoding] All retries failed, using fallback address');
+    return null;
+  }
 
+  private async reverseGeocodeInternal(latitude: number, longitude: number): Promise<string> {
+    if (__DEV__) console.log(`[Geocoding] Starting: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
+
+    // Try Google Geocoding API first (most reliable)
+    const googleResult = await this.reverseGeocodeWithGoogleAPI(latitude, longitude);
+    if (googleResult) {
+      // Cache the result
+      if (this.config.cacheAddresses) {
+        const cacheKey = `${latitude.toFixed(5)},${longitude.toFixed(5)}`;
+        this.addressCache.set(cacheKey, {
+          address: googleResult,
+          timestamp: Date.now()
+        });
+      }
+      return googleResult;
+    }
+
+    // Fallback to expo-location (device native)
+    if (__DEV__) console.log('[Geocoding] Falling back to expo-location');
+    const expoResult = await this.reverseGeocodeWithExpoLocation(latitude, longitude);
+    if (expoResult) {
+      // Cache the result
+      if (this.config.cacheAddresses) {
+        const cacheKey = `${latitude.toFixed(5)},${longitude.toFixed(5)}`;
+        this.addressCache.set(cacheKey, {
+          address: expoResult,
+          timestamp: Date.now()
+        });
+      }
+      return expoResult;
+    }
+
+    // Both failed - use fallback address
+    console.warn('[Geocoding] All methods failed, using fallback address');
     if (this.config.enableFallbacks) {
       return this.generateFallbackAddress(latitude, longitude);
     }
 
-    throw lastError || new Error('Geocoding failed after all retries');
+    throw new Error('Geocoding failed - all methods exhausted');
   }
 
   private async processLocationUpdate(locationUpdate: Location.LocationObject): Promise<LocationData> {

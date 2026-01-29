@@ -90,22 +90,37 @@ export default function ClientHomeScreen() {
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
 
   // Subscribe to nearby online drivers (50km radius)
-  // Only show when there's no active order (don't clutter map during order)
+  // Keep subscription active even when connected - NativeMap will render connected driver as green
+  const isDriverConnected = activeOrder?.status === 'accepted' || activeOrder?.status === 'in_progress';
   const { nearbyDrivers } = useNearbyDrivers({
     clientLocation: location,
     radiusKm: 50,
-    enabled: !activeOrder // Disable when there's an active order
+    enabled: true // Always enabled - connected driver shown as green, others as orange
   });
 
   // Track driver location in real-time when order is accepted
   const driverLocation = useDriverTracking(activeOrder);
 
-  // Calculate ETA from driver to client
-  const { eta } = useDriverETA({
+  // Calculate ETA and route from driver to client
+  const { eta, routeCoordinates } = useDriverETA({
     driverLocation,
     clientLocation: location,
-    enabled: !!driverLocation && (activeOrder?.status === 'accepted' || activeOrder?.status === 'in_progress')
+    enabled: !!driverLocation && isDriverConnected
   });
+
+  // Debug: Log driver tracking state
+  useEffect(() => {
+    if (__DEV__ && activeOrder?.status === 'accepted') {
+      console.log('🚗 [ClientHome] Driver tracking state:', {
+        isDriverConnected,
+        hasDriverLocation: !!driverLocation,
+        driverLocationData: driverLocation ? { lat: driverLocation.latitude, lng: driverLocation.longitude } : null,
+        activeOrderStatus: activeOrder?.status,
+        acceptedDriverId: activeOrder?.acceptedDriverId || 'NOT SET',
+        showDriverMarker: !!driverLocation && isDriverConnected
+      });
+    }
+  }, [isDriverConnected, driverLocation, activeOrder?.status, activeOrder?.acceptedDriverId]);
 
   // Debug: Check Firebase Auth status on load
   useEffect(() => {
@@ -202,7 +217,9 @@ export default function ClientHomeScreen() {
         location={location}
         driverLocation={driverLocation}
         nearbyDrivers={nearbyDrivers}
-        showDriverMarker={!!driverLocation && (activeOrder?.status === 'accepted' || activeOrder?.status === 'in_progress')}
+        routeCoordinates={routeCoordinates}
+        connectedDriverId={activeOrder?.acceptedDriverId}
+        showDriverMarker={!!driverLocation && isDriverConnected}
         style={styles.mapContainer}
         onMapReady={() => { if (__DEV__) console.log('[Map] Client map loaded'); }}
         onLocatePress={quickLocate}

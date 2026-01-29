@@ -27,6 +27,7 @@ import {
 import { db, auth } from '../../config/firebase';
 import { safeOnSnapshot, safeFirestoreCall } from '../../utils/safeFirestore';
 import { geohashForLocation } from 'geofire-common';
+import { unlockDriver } from './driverLocks';
 import { 
   Order, 
   OrderStatus,
@@ -489,12 +490,13 @@ export const cancelOrder = async (orderId: string): Promise<void> => {
 };
 
 /**
- * ✅ NEW: Clean up all bids associated with a cancelled order
+ * ✅ FIXED: Clean up all bids associated with a cancelled order
+ * Now also releases driver locks for any reserved bids
  */
 const cleanupBidsForCancelledOrder = async (orderId: string): Promise<void> => {
   try {
     console.log('🧹 [FIRESTORE] Cleaning up bids for cancelled order:', orderId);
-    
+
     // Get all bids for this order
     const bidsRef = collection(db, COLLECTIONS.BIDS);
     const q = query(
@@ -502,19 +504,30 @@ const cleanupBidsForCancelledOrder = async (orderId: string): Promise<void> => {
       where('orderId', '==', orderId),
       where('status', 'in', ['active', 'reserved'])
     );
-    
+
     const querySnapshot = await getDocs(q);
-    
+
     if (querySnapshot.empty) {
       console.log('ℹ️ [FIRESTORE] No active/reserved bids found for cancelled order');
       return;
     }
-    
+
+    // ✅ NEW: Collect driver IDs from reserved bids to unlock them
+    const driversToUnlock: string[] = [];
+
     const batch = writeBatch(db);
     let cleanedCount = 0;
-    
+
     querySnapshot.forEach((doc) => {
+      const bidData = doc.data();
       const bidRef = doc.ref;
+
+      // ✅ NEW: If bid was reserved, we need to unlock the driver
+      if (bidData.status === 'reserved' && bidData.driverId) {
+        driversToUnlock.push(bidData.driverId);
+        console.log(`🔓 [FIRESTORE] Will unlock driver ${bidData.driverId} (reserved bid)`);
+      }
+
       batch.update(bidRef, {
         status: 'cancelled',
         cancelledAt: serverTimestamp(),
@@ -522,10 +535,21 @@ const cleanupBidsForCancelledOrder = async (orderId: string): Promise<void> => {
       });
       cleanedCount++;
     });
-    
+
     await batch.commit();
     console.log(`✅ [FIRESTORE] Cleaned up ${cleanedCount} bids for cancelled order`);
-    
+
+    // ✅ NEW: Unlock all drivers that had reserved bids
+    for (const driverId of driversToUnlock) {
+      try {
+        await unlockDriver(driverId, orderId);
+        console.log(`✅ [FIRESTORE] Unlocked driver ${driverId} after order cancellation`);
+      } catch (unlockError) {
+        console.warn(`⚠️ [FIRESTORE] Failed to unlock driver ${driverId}:`, unlockError);
+        // Don't throw - cleanup should continue
+      }
+    }
+
   } catch (error) {
     console.error('❌ [FIRESTORE] Error cleaning up bids for cancelled order:', error);
     // Don't throw here - this is cleanup, main cancellation should still succeed
