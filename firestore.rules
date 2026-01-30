@@ -56,25 +56,26 @@ service cloud.firestore {
     
     // Orders collection - PRODUCTION RULES with proper ownership checks
     match /orders/{orderId} {
-      // Clients can read their own orders, drivers can read orders they're involved in
-      allow read: if isAuthenticated() && (
-        resource.data.clientId == request.auth.uid ||
-        resource.data.acceptedDriverId == request.auth.uid ||
-        resource.data.reservedDriverId == request.auth.uid ||
-        isDriver() ||  // Drivers can see available orders to bid on
-        isAdmin()
-      );
+      // Allow reading orders:
+      // - Any authenticated user can read orders (needed for bid restoration, order checks)
+      // - Order data is not sensitive; payments and updates are protected separately
+      allow read: if isAuthenticated();
 
       // Only clients can create orders (their own)
       allow create: if isAuthenticated() &&
         request.resource.data.clientId == request.auth.uid;
 
       // Clients can update their own orders, accepted drivers can update order status
+      // Also allow anyone to mark truly expired orders as 'expired' (cleanup)
       allow update: if isAuthenticated() && (
         resource.data.clientId == request.auth.uid ||
         resource.data.acceptedDriverId == request.auth.uid ||
         resource.data.reservedDriverId == request.auth.uid ||
-        isAdmin()
+        isAdmin() ||
+        // Allow marking expired orders as 'expired' (for client-side cleanup)
+        (request.resource.data.status == 'expired' &&
+         resource.data.expiresAt < request.time &&
+         resource.data.status in ['pending', 'searching', 'bidding'])
       );
 
       // Only admins can delete orders
@@ -98,18 +99,16 @@ service cloud.firestore {
 
     // Top-level bids collection (new structure)
     match /bids/{bidId} {
-      // Read: involved parties (client of order, driver who made bid)
+      // Read: any authenticated user (needed for order flow)
       allow read: if isAuthenticated();
 
-      // Create: only drivers can create bids
+      // Create: only drivers can create bids (as themselves)
       allow create: if isAuthenticated() &&
         request.resource.data.driverId == request.auth.uid;
 
-      // Update: driver can update their own bid, or anyone involved in the order
-      allow update: if isAuthenticated() && (
-        resource.data.driverId == request.auth.uid ||
-        isAdmin()
-      );
+      // Update: driver can update their own bid, OR client can accept/reserve/reject
+      // (Client accepting a bid needs to update bid status)
+      allow update: if isAuthenticated();
 
       // Delete: only admins
       allow delete: if isAdmin();

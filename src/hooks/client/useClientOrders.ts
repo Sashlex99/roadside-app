@@ -134,49 +134,16 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
     }
   }, [activeOrder?.id, activeOrder?.status, handleOrphanedOrder, setCustomModal]);
 
-  // -------- Order Status Change Notifications (Completed & Cancelled) --------
+  // -------- Order Status Tracking --------
+  // Note: Completion popup is handled directly in subscription callback for reliability
+  // This effect just tracks the current status for the ref
   useEffect(() => {
-    const prevStatus = prevOrderStatusRef.current;
     const currentStatus = activeOrder?.status;
-
-    // Only process if there was a previous status (skip initial load)
-    if (prevStatus && currentStatus && prevStatus !== currentStatus) {
-      // Detect transition to 'completed'
-      if (currentStatus === 'completed') {
-        console.log('🎉 [Orders] Order completed! Showing notification to client');
-        setCustomModal({
-          visible: true,
-          title: 'Поръчката е завършена',
-          message: 'Благодарим ви, че използвахте нашите услуги! Надяваме се да сте доволни.',
-          icon: 'checkmark-circle',
-          iconColor: '#10B981',
-          buttons: [{
-            text: 'Благодаря!',
-            onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
-          }]
-        });
-      }
-
-      // Detect transition to 'cancelled'
-      if (currentStatus === 'cancelled') {
-        console.log('[Orders] Order cancelled! Showing notification to client');
-        setCustomModal({
-          visible: true,
-          title: 'Поръчката е отказана',
-          message: 'Поръчката беше отменена. Можете да създадете нова заявка ако все още имате нужда от помощ.',
-          icon: 'information-circle-outline',
-          iconColor: colors.textSecondary,
-          buttons: [{
-            text: 'Разбрах',
-            onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
-          }]
-        });
-      }
+    // Only update ref if we have an active status (not null/undefined)
+    if (currentStatus) {
+      prevOrderStatusRef.current = currentStatus;
     }
-
-    // Update previous status ref (always, even on initial load)
-    prevOrderStatusRef.current = currentStatus || null;
-  }, [activeOrder?.status, setCustomModal]);
+  }, [activeOrder?.status]);
 
   // -------- Real-time order subscription --------
   useEffect(() => {
@@ -195,12 +162,63 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
     const setupSubscription = () => {
       try {
         const unsubscribe = subscribeToClientOrders(user.uid, (orders) => {
-          // Exclude expired orders from active consideration
+          // Debug: log all received orders
+          console.log('📋 [Orders] Received orders:', orders.map(o => ({
+            id: o.id?.slice(-6),
+            status: o.status,
+            completedAt: o.completedAt ? 'SET' : 'NOT SET'
+          })));
+          console.log('📋 [Orders] Current tracking:', {
+            lastOrderId: lastOrderId?.slice(-6) || 'NONE',
+            prevStatus: prevOrderStatusRef.current
+          });
+
+          // Find active orders (not completed/cancelled/expired)
           const openOrder = orders.find((o) =>
-            ['pending', 'searching', 'bidding', 'payment_pending', 'accepted'].includes(o.status) &&
-            o.status !== 'expired'
+            ['pending', 'searching', 'bidding', 'payment_pending', 'accepted', 'in_progress'].includes(o.status)
           );
-          
+
+          // Check for recently completed order that matches our tracked order
+          const recentlyCompletedOrder = orders.find((o) =>
+            o.status === 'completed' && o.id === lastOrderId
+          );
+
+          // Also check for any completed order if lastOrderId doesn't match
+          const anyCompletedOrder = orders.find((o) => o.status === 'completed');
+
+          console.log('📋 [Orders] Found:', {
+            openOrder: openOrder?.id?.slice(-6) || 'NONE',
+            recentlyCompletedOrder: recentlyCompletedOrder?.id?.slice(-6) || 'NONE',
+            anyCompletedOrder: anyCompletedOrder?.id?.slice(-6) || 'NONE'
+          });
+
+          // Show completion popup if we found a completed order that was previously active
+          // Use anyCompletedOrder as fallback if lastOrderId doesn't match
+          const completedOrder = recentlyCompletedOrder || anyCompletedOrder;
+          if (completedOrder && !openOrder) {
+            // Only show if we haven't already shown for this order
+            if (prevOrderStatusRef.current && prevOrderStatusRef.current !== 'completed') {
+              console.log('🎉 [Orders] Order completed! Showing notification to client');
+              setCustomModal({
+                visible: true,
+                title: 'Поръчката е завършена',
+                message: 'Благодарим ви, че използвахте нашите услуги! Надяваме се да сте доволни.',
+                icon: 'checkmark-circle',
+                iconColor: '#10B981',
+                buttons: [{
+                  text: 'Благодаря!',
+                  onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
+                }]
+              });
+              prevOrderStatusRef.current = 'completed';
+            } else {
+              console.log('📋 [Orders] Skipping popup:', {
+                prevStatus: prevOrderStatusRef.current,
+                reason: !prevOrderStatusRef.current ? 'no prev status' : 'already completed'
+              });
+            }
+          }
+
           setActiveOrder(openOrder || null);
           
           // Keep track of the most recent order (even if expired) for bids

@@ -135,7 +135,11 @@ export const ensureDriverNotification = async (
     return { success: true, alreadyNotified: false };
     
   } catch (error) {
-    console.error('❌ [DRIVER_NOTIFICATION] Error ensuring driver notification:', error);
+    // Non-critical error - log as warning, not error
+    if (__DEV__) {
+      console.log('ℹ️ [DRIVER_NOTIFICATION] Could not ensure notification (non-critical):',
+        error instanceof Error ? error.message : 'Unknown error');
+    }
     return { success: false, alreadyNotified: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 };

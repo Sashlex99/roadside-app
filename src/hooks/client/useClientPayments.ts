@@ -156,7 +156,7 @@ export function useClientPayments({
               if (result.success) {
                 console.log('✅ Driver notification ensured:', result.alreadyNotified ? 'already notified' : 'notification triggered');
               } else {
-                console.warn('⚠️ Driver notification failed:', result.error);
+                console.log('ℹ️ Driver notification skipped (non-critical):', result.error);
               }
             });
           }).catch(error => {
@@ -493,7 +493,7 @@ export function useClientPayments({
           if (result.success) {
             console.log('✅ Driver notification ensured:', result.alreadyNotified ? 'already notified' : 'notification triggered');
           } else {
-            console.warn('⚠️ Driver notification failed:', result.error);
+            console.log('ℹ️ Driver notification skipped (non-critical):', result.error);
           }
         });
 

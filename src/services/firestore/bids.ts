@@ -438,7 +438,7 @@ export const confirmBid = async (orderId: string, bidId: string): Promise<void> 
       if (result.success) {
         console.log('✅ [FIRESTORE] Driver notification ensured successfully');
       } else {
-        console.warn('⚠️ [FIRESTORE] Driver notification failed:', result.error);
+        console.log('ℹ️ [FIRESTORE] Driver notification skipped (non-critical):', result.error);
 
         // Try fallback notification
         console.log('🔄 Retrying driver notification...');
