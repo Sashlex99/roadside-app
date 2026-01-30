@@ -450,6 +450,26 @@ export const updateOrderStatus = async (orderId: string, status: OrderStatus, ad
       updateData.cancelledAt = serverTimestamp();
     }
 
+    // Safety net: Unlock driver when order is completed
+    // This ensures the driver is freed even if payment confirmation didn't unlock them
+    if (status === 'completed') {
+      try {
+        const orderDoc = await getDoc(docRef);
+        const orderData = orderDoc.data();
+        if (orderData?.acceptedDriverId) {
+          const unlockResult = await unlockDriver(orderData.acceptedDriverId, orderId);
+          if (unlockResult.success) {
+            console.log(`🔓 [FIRESTORE] Driver ${orderData.acceptedDriverId} unlocked on order completion`);
+          } else {
+            console.log(`ℹ️ [FIRESTORE] Driver unlock on completion: ${unlockResult.error || 'already unlocked'}`);
+          }
+        }
+      } catch (unlockError) {
+        console.warn(`⚠️ [FIRESTORE] Unlock on completion failed (may already be unlocked):`, unlockError);
+        // Don't throw - order update should still proceed
+      }
+    }
+
     await updateDoc(docRef, updateData);
     console.log(`✅ [FIRESTORE] Order ${orderId} status updated to ${status}`);
   } catch (error) {

@@ -228,16 +228,19 @@ export const unlockDriver = async (
           duration: Date.now() - startTime
         };
       } else {
-        console.warn('⚠️ [DRIVER_LOCK] Cannot unlock - lock owned by different order:', {
+        // Lock is owned by a different order - this is OK, don't unlock it
+        // Return success=true because from caller's perspective, this isn't an error
+        // The driver might already be working on a new order
+        console.log('ℹ️ [DRIVER_LOCK] Lock owned by different order, skipping unlock:', {
           driverId,
           requestOrderId: orderId,
           lockOwnerOrderId: lockData.orderId
         });
-        
+
         return {
-          success: false,
+          success: true, // Changed from false - this is idempotent, not an error
           lockAcquired: false,
-          error: `Driver is locked by order ${lockData.orderId}, cannot unlock from order ${orderId}`,
+          error: `Driver is locked by different order ${lockData.orderId}`, // Still include info for logging
           conflictOrderId: lockData.orderId,
           duration: Date.now() - startTime
         };

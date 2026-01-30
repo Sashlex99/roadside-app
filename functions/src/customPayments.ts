@@ -2,6 +2,34 @@ import * as functions from 'firebase-functions/v1';
 import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
 
+/**
+ * Unlock driver after successful payment
+ * Idempotent - safe to call multiple times
+ */
+async function unlockDriver(driverId: string, orderId: string): Promise<void> {
+  try {
+    const lockRef = admin.firestore().collection('driverLocks').doc(driverId);
+    const lockDoc = await lockRef.get();
+
+    if (!lockDoc.exists) {
+      console.log(`ℹ️ [UNLOCK] No lock found for driver ${driverId} - already unlocked`);
+      return;
+    }
+
+    const lockData = lockDoc.data();
+    if (lockData?.orderId !== orderId) {
+      console.log(`ℹ️ [UNLOCK] Lock owned by different order ${lockData?.orderId}, not unlocking`);
+      return;
+    }
+
+    await lockRef.delete();
+    console.log(`🔓 [UNLOCK] Driver ${driverId} unlocked by order ${orderId}`);
+  } catch (error) {
+    console.error(`❌ [UNLOCK] Error unlocking driver ${driverId}:`, error);
+    // Don't throw - unlock failure shouldn't break payment flow
+  }
+}
+
 // Initialize Stripe with secret key
 const stripe = new Stripe(
   functions.config().stripe?.secret_key || process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder'
@@ -461,6 +489,11 @@ async function handlePaymentLinkSuccess(session: any) {
       
       console.log(`✅ [WEBHOOK] 2-phase commit completed for order ${orderId}, bid ${orderData.reservedBidId}`);
     });
+
+    // 🔓 Unlock driver after successful payment (idempotent - safe even if already unlocked)
+    if (orderData.reservedDriverId) {
+      await unlockDriver(orderData.reservedDriverId, orderId);
+    }
 
     // Update payment link record
     const paymentLinkId = session.payment_link;
