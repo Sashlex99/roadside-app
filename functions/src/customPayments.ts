@@ -428,17 +428,23 @@ async function handlePaymentLinkSuccess(session: any) {
   }
 
   try {
+    // Store driver ID to unlock after transaction
+    let driverIdToUnlock: string | null = null;
+
     // ✅ NEW: Use transaction to implement Phase 2 of 2-phase commit
     await admin.firestore().runTransaction(async (transaction) => {
       // 1. Read order to check current status
       const orderRef = admin.firestore().collection('orders').doc(orderId);
       const orderDoc = await transaction.get(orderRef);
-      
+
       if (!orderDoc.exists) {
         throw new Error('Order not found');
       }
-      
+
       const orderData = orderDoc.data()!;
+
+      // Store driver ID for unlock after transaction
+      driverIdToUnlock = orderData.reservedDriverId || null;
       
       // 2. Only confirm if order is in payment_pending status (2-phase commit)
       if (orderData.status !== 'payment_pending') {
@@ -491,8 +497,8 @@ async function handlePaymentLinkSuccess(session: any) {
     });
 
     // 🔓 Unlock driver after successful payment (idempotent - safe even if already unlocked)
-    if (orderData.reservedDriverId) {
-      await unlockDriver(orderData.reservedDriverId, orderId);
+    if (driverIdToUnlock) {
+      await unlockDriver(driverIdToUnlock, orderId);
     }
 
     // Update payment link record
