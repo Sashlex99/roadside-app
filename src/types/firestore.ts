@@ -91,6 +91,8 @@ export interface Order {
   createdAt: Date;
   updatedAt: Date;
   expiresAt: Date; // createdAt + 5 minutes
+  completedAt?: Date; // When order was completed
+  cancelledAt?: Date; // When order was cancelled
   
   // Търсене на шофьори
   searchRadius: number; // започва от 5км

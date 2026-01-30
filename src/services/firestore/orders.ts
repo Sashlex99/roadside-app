@@ -432,11 +432,25 @@ export const getOrder = async (orderId: string): Promise<Order | null> => {
 export const updateOrderStatus = async (orderId: string, status: OrderStatus, additionalData?: Partial<Order>): Promise<void> => {
   try {
     const docRef = doc(db, COLLECTIONS.ORDERS, orderId);
-    await updateDoc(docRef, {
+
+    // Build update data
+    const updateData: Record<string, any> = {
       status,
       updatedAt: serverTimestamp(),
       ...additionalData
-    });
+    };
+
+    // Automatically set completedAt when order is completed
+    if (status === 'completed') {
+      updateData.completedAt = serverTimestamp();
+    }
+
+    // Automatically set cancelledAt when order is cancelled
+    if (status === 'cancelled') {
+      updateData.cancelledAt = serverTimestamp();
+    }
+
+    await updateDoc(docRef, updateData);
     console.log(`✅ [FIRESTORE] Order ${orderId} status updated to ${status}`);
   } catch (error) {
     console.error("Error updating order status:", error);
@@ -825,63 +839,83 @@ export const findOrdersInRadius = async (
  */
 export const subscribeToClientOrders = (clientId: string, callback: (orders: Order[]) => void) => {
   console.log(`📡 [FIRESTORE] Setting up client orders subscription for: ${clientId}`);
-  
+
   // Track subscription state
   let subscriptionActive = true;
   let errorCount = 0;
   const maxErrors = 3;
-  
+
   const attemptSubscription = (): (() => void) => {
     try {
       const ordersRef = collection(db, COLLECTIONS.ORDERS);
+      // Query includes all statuses to detect status transitions (completed/cancelled)
+      // We filter old completed orders in JavaScript
       const q = query(
         ordersRef,
         where('clientId', '==', clientId),
-        where('status', '!=', 'completed'),
-        orderBy('status'),
-        orderBy('createdAt', 'desc')
+        orderBy('createdAt', 'desc'),
+        limit(10) // Limit to recent orders
       );
-      
-      return safeOnSnapshot(q, 
+
+      return safeOnSnapshot(q,
         (querySnapshot) => {
           try {
             // Reset error count on successful callback
             errorCount = 0;
-            
+
             if (!subscriptionActive) {
               console.log('📡 [FIRESTORE] Subscription deactivated, ignoring update');
               return;
             }
-            
+
+            const now = Date.now();
+            const COMPLETED_VISIBILITY_MS = 60000; // Show completed orders for 1 minute (for status transition detection)
+
             const orders: Order[] = [];
             querySnapshot.forEach((doc: QueryDocumentSnapshot<DocumentData>) => {
               try {
                 const data = doc.data();
-                orders.push({
+                const order = {
                   id: doc.id,
                   ...data,
                   createdAt: data.createdAt?.toDate(),
                   updatedAt: data.updatedAt?.toDate(),
                   expiresAt: data.expiresAt?.toDate(),
-                } as Order);
+                  completedAt: data.completedAt?.toDate(),
+                  cancelledAt: data.cancelledAt?.toDate(),
+                } as Order;
+
+                // Include order if:
+                // 1. Not completed/cancelled, OR
+                // 2. Recently completed/cancelled (within 1 minute) for status transition detection
+                if (order.status !== 'completed' && order.status !== 'cancelled') {
+                  orders.push(order);
+                } else {
+                  // Include recently completed/cancelled orders
+                  const finishedTime = order.completedAt?.getTime() || order.cancelledAt?.getTime() || order.updatedAt?.getTime() || 0;
+                  if (now - finishedTime < COMPLETED_VISIBILITY_MS) {
+                    orders.push(order);
+                    console.log(`📡 [FIRESTORE] Including recently ${order.status} order for transition detection`);
+                  }
+                }
               } catch (docError) {
                 console.error(`❌ [FIRESTORE] Error processing order document ${doc.id}:`, docError);
               }
             });
-            
+
             // Sort by creation time (newest first)
             orders.sort((a, b) => {
               if (!a.createdAt || !b.createdAt) return 0;
               return b.createdAt.getTime() - a.createdAt.getTime();
             });
-            
+
             console.log(`📡 [FIRESTORE] Client orders updated: ${orders.length} orders for ${clientId}`);
             callback(orders);
-            
+
           } catch (callbackError) {
             console.error('❌ [FIRESTORE] Error in client orders callback:', callbackError);
             errorCount++;
-            
+
             if (errorCount >= maxErrors) {
               console.error(`❌ [FIRESTORE] Too many callback errors (${errorCount}), stopping subscription`);
               subscriptionActive = false;
