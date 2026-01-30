@@ -692,6 +692,89 @@ export const onBidCreateNotification = onDocumentCreated(
 
 ---
 
+## Security Architecture
+
+### Payment Security Model
+
+The payment flow uses a **2-phase commit pattern** with driver locking to prevent race conditions:
+
+```
+Phase 1: Reservation
+─────────────────────
+Client accepts bid
+    ↓
+lockDriver(driverId, orderId) - 5 min timeout
+    ↓
+reserveBid() - marks bid as 'reserved'
+    ↓
+Order status → 'payment_pending'
+    ↓
+Payment Sheet opens
+
+Phase 2: Confirmation (via Stripe Webhook)
+──────────────────────────────────────────
+Stripe webhook fires (checkout.session.completed)
+    ↓
+Check idempotency (webhookEvents collection)
+    ↓
+Verify order is in 'payment_pending' status
+    ↓
+Transaction: Order → 'accepted', Bid → 'accepted'
+    ↓
+unlockDriver() - releases lock
+    ↓
+Driver sees job, client sees tracking
+```
+
+**Key Security Checks:**
+1. **Order Ownership:** Payment links only created for orders owned by requesting user
+2. **Webhook Idempotency:** Duplicate webhooks (Stripe retries) are detected and skipped
+3. **Lock Timeout:** 5-minute locks auto-expire to prevent deadlocks
+4. **Crash Recovery:** Orphaned `payment_pending` orders detected on app startup
+
+### Firestore Security Rules Summary
+
+| Collection | Read | Write |
+|------------|------|-------|
+| `users` | Authenticated | Owner or Admin |
+| `orders` | Owner, assigned driver, or any driver (for bidding) | Owner or assigned driver |
+| `bids` | Authenticated | Owner (driver) only |
+| `driverLocations` | Authenticated | Only the driver themselves |
+| `driverLocks` | Authenticated | Authenticated (with ownership checks) |
+| `webhookEvents` | None (server only) | None (server only) |
+| `paymentLinks` | Owner only | None (server only) |
+
+### Driver Lock System (`driverLocks` collection)
+
+Prevents multiple clients from accepting the same driver simultaneously:
+
+```typescript
+interface DriverLock {
+  isLocked: boolean;
+  orderId: string;
+  lockedAt: Timestamp;
+  expiresAt: Timestamp;  // 5 minutes
+  lockReason: 'bid_reservation' | 'payment_processing' | 'order_completion';
+  metadata?: {
+    bidId?: string;
+    clientId?: string;
+  };
+}
+```
+
+**Key Functions:**
+- `lockDriver(driverId, orderId)` - Acquire lock with transaction
+- `unlockDriver(driverId, orderId)` - Release lock (idempotent, ownership-verified)
+- `isDriverLocked(driverId)` - Check lock status
+- `forceUnlockDriver(driverId)` - Emergency unlock (admin use)
+- `cleanupExpiredDriverLocks()` - Scheduled cleanup
+
+**Files:**
+- `src/services/firestore/driverLocks.ts` - Client-side lock operations
+- `functions/src/customPayments.ts` - Server-side unlock after payment
+
+---
+
 ## Error Handling & Resilience
 
 ### Firebase SDK Promise Bug Workaround
@@ -844,6 +927,142 @@ const markerStyles = {
 ---
 
 ## Session History
+
+### 2026-01-30 - System Robustness Review & Security Fixes
+
+**Major security and reliability update** addressing critical vulnerabilities discovered during comprehensive system review.
+
+#### Issues Identified & Fixed
+
+| Severity | Issue | Fix Applied |
+|----------|-------|-------------|
+| **CRITICAL** | Payment validation disabled (any user could create payment for any order) | Enabled order ownership verification in `functions/src/customPayments.ts` |
+| **CRITICAL** | Firestore rules too permissive (all authenticated users could read/write all orders) | Added proper ownership checks in `firestore.rules` |
+| **CRITICAL** | No webhook idempotency (duplicate Stripe webhooks could process payments twice) | Added `webhookEvents` collection to track processed events |
+| **HIGH** | App crash leaves orders stuck in `payment_pending` | Added crash recovery modal on app startup in `useClientOrders.ts` |
+
+#### Security Fixes Implemented
+
+**1. Payment Validation (`functions/src/customPayments.ts`)**
+```typescript
+// Before: DISABLED - Any user could create payment for any order
+console.log('Skipping order validation for testing purposes');
+
+// After: ENABLED - Verifies order ownership
+const orderDoc = await admin.firestore().collection('orders').doc(orderId).get();
+if (orderDoc.data()?.clientId !== userId) {
+  res.status(403).json({ error: 'User not authorized for this order' });
+  return;
+}
+```
+
+**2. Webhook Idempotency (`functions/src/customPayments.ts`)**
+```typescript
+// Check if webhook already processed (prevents duplicate charges)
+const webhookEventRef = admin.firestore().collection('webhookEvents').doc(session.id);
+const existingEvent = await webhookEventRef.get();
+
+if (existingEvent.exists) {
+  console.log(`Webhook ${session.id} already processed, skipping`);
+  return;
+}
+
+// Mark as processing before handling
+await webhookEventRef.set({
+  sessionId: session.id,
+  orderId,
+  type: 'checkout.session.completed',
+  processedAt: new Date(),
+  status: 'processing'
+});
+```
+
+**3. Firestore Security Rules (`firestore.rules`)**
+```javascript
+// Orders - proper ownership checks
+match /orders/{orderId} {
+  allow read: if isAuthenticated() && (
+    resource.data.clientId == request.auth.uid ||
+    resource.data.acceptedDriverId == request.auth.uid ||
+    isDriver() || isAdmin()
+  );
+  allow create: if request.resource.data.clientId == request.auth.uid;
+  allow update: if resource.data.clientId == request.auth.uid ||
+    resource.data.acceptedDriverId == request.auth.uid;
+}
+
+// Driver locations - only owner can write
+match /driverLocations/{driverId} {
+  allow read: if isAuthenticated();
+  allow create, update: if request.auth.uid == driverId;
+}
+
+// Server-only collections
+match /webhookEvents/{eventId} {
+  allow read, write: if false; // Admin SDK only
+}
+```
+
+**4. Crash Recovery (`src/hooks/client/useClientOrders.ts`)**
+```typescript
+// Detect orphaned payment_pending orders on app startup (>10 min old)
+const ORPHAN_THRESHOLD_MS = 10 * 60 * 1000;
+
+useEffect(() => {
+  if (activeOrder?.status === 'payment_pending' && activeOrder.reservedAt) {
+    const timeSinceReserved = Date.now() - activeOrder.reservedAt.getTime();
+
+    if (timeSinceReserved > ORPHAN_THRESHOLD_MS) {
+      setCustomModal({
+        title: 'Незавършено плащане',
+        message: `Имате поръчка, чакаща плащане от ${minutesAgo} минути.`,
+        buttons: [
+          { text: 'Опитай отново', onPress: () => handleOrphanedOrder(activeOrder, 'retry') },
+          { text: 'Отмени поръчката', onPress: () => handleOrphanedOrder(activeOrder, 'cancel') }
+        ]
+      });
+    }
+  }
+}, [activeOrder?.id, activeOrder?.status]);
+```
+
+#### Files Modified
+| File | Changes |
+|------|---------|
+| `functions/src/customPayments.ts` | Enabled payment validation, added webhook idempotency |
+| `firestore.rules` | Added ownership checks for orders, bids, driverLocations |
+| `src/hooks/client/useClientOrders.ts` | Added orphan detection and recovery modal |
+| `src/services/firestore/index.ts` | Exported driver lock functions |
+
+#### Remaining P1/P2 Items (Future)
+- Listener limits to prevent memory leaks (`useDriverOrders.ts`)
+- Deep link payment verification via Stripe API
+- Geohash queries for efficient nearby driver filtering
+- Circuit breaker alerts/monitoring
+
+---
+
+### 2026-01-29 - Driver Lock & Green Truck Icon Fixes
+
+**Fixed driver locking and map marker issues:**
+
+| Issue | Fix |
+|-------|-----|
+| Green truck icon not appearing when driver connects | Modified `NativeMap.tsx` to use `connectedDriverId` prop |
+| Driver lock not released after payment | Added `unlockDriver()` call in payment webhook |
+| Order completion notification missing | Added status transition detection in `useClientOrders.ts` |
+
+**Driver Lock Architecture:**
+```
+Client accepts bid → lockDriver() called (5 min timeout) →
+Payment sheet opens → Payment succeeds →
+Webhook fires → Order confirmed → unlockDriver() called →
+Driver free to receive new orders
+```
+
+The lock is ONLY for the payment window (preventing race conditions), not for the entire order duration.
+
+---
 
 ### 2026-01-28 - Client Information & Driver Tracking
 **Major update** adding comprehensive real-time features:

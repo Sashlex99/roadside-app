@@ -1,7 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
-import { subscribeToClientOrders, subscribeToBidsForOrder, updateOrderStatus } from '../../services/firestore';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { subscribeToClientOrders, subscribeToBidsForOrder, updateOrderStatus, unlockDriver } from '../../services/firestore';
 import { CustomModal as CustomModalType } from '../../types/shared';
 import { colors } from '../../constants/colors';
+
+// How long before payment_pending is considered orphaned (10 minutes)
+const ORPHAN_THRESHOLD_MS = 10 * 60 * 1000;
 
 interface UseClientOrdersParams {
   user: any;
@@ -25,6 +28,9 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
   // Track previous order status for detecting status transitions
   const prevOrderStatusRef = useRef<string | null>(null);
 
+  // Track if we've already checked for orphaned orders this session
+  const orphanCheckDoneRef = useRef(false);
+
   // ✅ FIXED: Cleanup request modal timeout on unmount
   useEffect(() => {
     return () => {
@@ -34,6 +40,99 @@ export function useClientOrders({ user, authReady, refreshAuth, logout, setCusto
       }
     };
   }, []);
+
+  // ✅ CRASH RECOVERY: Handler for orphaned payment_pending orders
+  const handleOrphanedOrder = useCallback(async (order: any, action: 'cancel' | 'retry') => {
+    console.log(`🔧 [Recovery] Handling orphaned order ${order.id} with action: ${action}`);
+
+    try {
+      if (action === 'cancel') {
+        // Release the driver lock if any
+        if (order.reservedDriverId) {
+          try {
+            await unlockDriver(order.reservedDriverId, order.id, 'orphan_recovery_cancel');
+          } catch (unlockErr) {
+            console.warn('[Recovery] Failed to unlock driver:', unlockErr);
+          }
+        }
+
+        // Cancel the order
+        await updateOrderStatus(order.id, 'cancelled');
+
+        setCustomModal({
+          visible: true,
+          title: 'Поръчката е отменена',
+          message: 'Незавършената поръчка беше отменена. Можете да създадете нова заявка.',
+          icon: 'checkmark-circle',
+          iconColor: '#10B981',
+          buttons: [{
+            text: 'Разбрах',
+            onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
+          }]
+        });
+      } else if (action === 'retry') {
+        // For retry, we just close the modal - the payment flow will be triggered
+        // when user taps on the order panel
+        setCustomModal(prev => ({ ...prev, visible: false }));
+      }
+    } catch (error) {
+      console.error('[Recovery] Failed to handle orphaned order:', error);
+      setCustomModal({
+        visible: true,
+        title: 'Грешка',
+        message: 'Възникна грешка при обработката. Моля опитайте отново.',
+        icon: 'warning-outline',
+        iconColor: colors.error,
+        buttons: [{
+          text: 'Затвори',
+          onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
+        }]
+      });
+    }
+  }, [setCustomModal]);
+
+  // ✅ CRASH RECOVERY: Check for orphaned payment_pending orders on startup
+  useEffect(() => {
+    // Only check once per session and when we have an active order
+    if (orphanCheckDoneRef.current || !activeOrder) return;
+
+    // Check if order is stuck in payment_pending
+    if (activeOrder.status === 'payment_pending' && activeOrder.reservedAt) {
+      const reservedTime = activeOrder.reservedAt instanceof Date
+        ? activeOrder.reservedAt.getTime()
+        : activeOrder.reservedAt?.toDate?.()?.getTime() || Date.now();
+
+      const timeSinceReserved = Date.now() - reservedTime;
+
+      if (timeSinceReserved > ORPHAN_THRESHOLD_MS) {
+        orphanCheckDoneRef.current = true;
+        const minutesAgo = Math.floor(timeSinceReserved / 60000);
+
+        console.log(`⚠️ [Recovery] Found orphaned payment_pending order: ${activeOrder.id} (${minutesAgo} min ago)`);
+
+        setCustomModal({
+          visible: true,
+          title: 'Незавършено плащане',
+          message: `Имате поръчка, чакаща плащане от ${minutesAgo} минути. Какво искате да направите?`,
+          icon: 'time-outline',
+          iconColor: '#FF9500',
+          buttons: [
+            {
+              text: 'Опитай отново',
+              onPress: () => handleOrphanedOrder(activeOrder, 'retry')
+            },
+            {
+              text: 'Отмени поръчката',
+              style: 'destructive',
+              onPress: () => handleOrphanedOrder(activeOrder, 'cancel')
+            }
+          ]
+        });
+      } else {
+        orphanCheckDoneRef.current = true;
+      }
+    }
+  }, [activeOrder?.id, activeOrder?.status, handleOrphanedOrder, setCustomModal]);
 
   // -------- Order Status Change Notifications (Completed & Cancelled) --------
   useEffect(() => {

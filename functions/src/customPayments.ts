@@ -141,25 +141,26 @@ export const createPaymentLinkHTTP = functions.region('europe-west3').https.onRe
       return;
     }
     
-    // Skip order validation for testing
-    // In production, uncomment the order validation below
-    console.log('⚠️ Skipping order validation for testing purposes');
-    
-    /*
-    // Verify the user is the client for this order
+    // ✅ SECURITY: Verify the user is the client for this order
     const orderDoc = await admin.firestore()
       .collection('orders')
       .doc(orderId)
       .get();
-    
-    const order = orderDoc.data();
-    if (!order || order.clientId !== userId) {
-      res.status(403).json({ 
-        error: 'User not authorized for this order' 
-      });
+
+    if (!orderDoc.exists) {
+      console.error(`❌ Order ${orderId} not found`);
+      res.status(404).json({ error: 'Order not found' });
       return;
     }
-    */
+
+    const order = orderDoc.data();
+    if (order?.clientId !== userId) {
+      console.error(`❌ User ${userId} not authorized for order ${orderId} (owner: ${order?.clientId})`);
+      res.status(403).json({ error: 'User not authorized for this order' });
+      return;
+    }
+
+    console.log('✅ Order ownership verified:', { orderId, clientId: userId });
     
     console.log('💰 Creating payment link:', {
       orderId,
@@ -420,7 +421,7 @@ export const handlePaymentLinkWebhook = functions.region('europe-west3').https.o
  */
 async function handlePaymentLinkSuccess(session: any) {
   console.log('✅ Payment link completed:', session.id);
-  
+
   const orderId = session.metadata?.orderId;
   if (!orderId) {
     console.error('❌ No orderId in session metadata');
@@ -428,6 +429,23 @@ async function handlePaymentLinkSuccess(session: any) {
   }
 
   try {
+    // ✅ IDEMPOTENCY: Check if this webhook has already been processed
+    const webhookEventRef = admin.firestore().collection('webhookEvents').doc(session.id);
+    const existingEvent = await webhookEventRef.get();
+
+    if (existingEvent.exists) {
+      console.log(`⚠️ Webhook ${session.id} already processed at ${existingEvent.data()?.processedAt?.toDate()}, skipping`);
+      return;
+    }
+
+    // Mark webhook as being processed (set early to prevent race conditions)
+    await webhookEventRef.set({
+      sessionId: session.id,
+      orderId,
+      type: 'checkout.session.completed',
+      processedAt: new Date(),
+      status: 'processing'
+    });
     // Store driver ID to unlock after transaction
     let driverIdToUnlock: string | null = null;
 
@@ -515,9 +533,24 @@ async function handlePaymentLinkSuccess(session: any) {
         });
     }
 
+    // ✅ Mark webhook as successfully completed
+    await webhookEventRef.update({ status: 'completed', completedAt: new Date() });
+
     console.log('✅ Payment webhook processing completed for order:', orderId);
   } catch (error) {
     console.error('❌ Error in payment webhook:', error);
+
+    // Mark webhook as failed (for debugging)
+    try {
+      const webhookEventRef = admin.firestore().collection('webhookEvents').doc(session.id);
+      await webhookEventRef.update({
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        failedAt: new Date()
+      });
+    } catch (updateError) {
+      console.error('❌ Failed to update webhook event status:', updateError);
+    }
   }
 }
 

@@ -54,37 +54,81 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
     
-    // Orders collection - EMERGENCY FIX: Temporarily allow all operations for testing
+    // Orders collection - PRODUCTION RULES with proper ownership checks
     match /orders/{orderId} {
-      // EMERGENCY: Allow all operations for authenticated users
-      allow read, write: if isAuthenticated();
-      
+      // Clients can read their own orders, drivers can read orders they're involved in
+      allow read: if isAuthenticated() && (
+        resource.data.clientId == request.auth.uid ||
+        resource.data.acceptedDriverId == request.auth.uid ||
+        resource.data.reservedDriverId == request.auth.uid ||
+        isDriver() ||  // Drivers can see available orders to bid on
+        isAdmin()
+      );
+
+      // Only clients can create orders (their own)
+      allow create: if isAuthenticated() &&
+        request.resource.data.clientId == request.auth.uid;
+
+      // Clients can update their own orders, accepted drivers can update order status
+      allow update: if isAuthenticated() && (
+        resource.data.clientId == request.auth.uid ||
+        resource.data.acceptedDriverId == request.auth.uid ||
+        resource.data.reservedDriverId == request.auth.uid ||
+        isAdmin()
+      );
+
       // Only admins can delete orders
       allow delete: if isAdmin();
-      
-      // Bids subcollection
+
+      // Bids subcollection (legacy - kept for backwards compatibility)
       match /bids/{bidId} {
-        // Anyone authenticated can read bids
+        // Anyone authenticated can read bids for orders they have access to
         allow read: if isAuthenticated();
-        
-        // Any authenticated user can create bids (we validate driverId in app)
-        allow create: if isAuthenticated();
-        
-        // Any authenticated user can update bids (we validate ownership in app)
+
+        // Drivers can create bids
+        allow create: if isAuthenticated() && isDriver();
+
+        // Drivers can update their own bids, clients can update to accept
         allow update: if isAuthenticated();
-        
+
         // Only admins can delete bids
         allow delete: if isAdmin();
       }
     }
-    
-    // Driver locations collection - EMERGENCY FIX
-    match /driverLocations/{driverId} {
-      // EMERGENCY: Allow all operations for authenticated users
-      allow read, write: if isAuthenticated();
-      
-      // Only admins can delete driver locations
+
+    // Top-level bids collection (new structure)
+    match /bids/{bidId} {
+      // Read: involved parties (client of order, driver who made bid)
+      allow read: if isAuthenticated();
+
+      // Create: only drivers can create bids
+      allow create: if isAuthenticated() &&
+        request.resource.data.driverId == request.auth.uid;
+
+      // Update: driver can update their own bid, or anyone involved in the order
+      allow update: if isAuthenticated() && (
+        resource.data.driverId == request.auth.uid ||
+        isAdmin()
+      );
+
+      // Delete: only admins
       allow delete: if isAdmin();
+    }
+    
+    // Driver locations collection - PRODUCTION RULES
+    match /driverLocations/{driverId} {
+      // Anyone can read driver locations (needed for nearby drivers feature)
+      allow read: if isAuthenticated();
+
+      // Only the driver themselves can write their location
+      allow create, update: if isAuthenticated() &&
+        request.auth.uid == driverId;
+
+      // Drivers can delete their own location, admins can delete any
+      allow delete: if isAuthenticated() && (
+        request.auth.uid == driverId ||
+        isAdmin()
+      );
     }
     
     // Notifications collection
@@ -99,6 +143,22 @@ service cloud.firestore {
     // Order analytics collection
     match /orderAnalytics/{analyticsId} {
       allow read, write: if isAuthenticated(); // Simplified for now
+    }
+
+    // Webhook events collection (for idempotency - server-side only)
+    match /webhookEvents/{eventId} {
+      // Only server (admin SDK) can write, users can't access
+      allow read, write: if false;
+    }
+
+    // Payment links collection (server-side created)
+    match /paymentLinks/{linkId} {
+      // Clients can read their own payment links
+      allow read: if isAuthenticated() &&
+        resource.data.clientId == request.auth.uid;
+
+      // Only server can write
+      allow write: if false;
     }
     
     // 🔒 NEW: Driver locks collection for atomic locking

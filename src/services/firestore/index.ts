@@ -59,4 +59,14 @@ export {
   createOrderAnalytics,
   getOrderAnalytics,
   getAnalyticsSummary
-} from './analytics'; 
+} from './analytics';
+
+// Driver Lock Operations
+export {
+  lockDriver,
+  unlockDriver,
+  isDriverLocked,
+  forceUnlockDriver,
+  cleanupExpiredDriverLocks,
+  getLockStatistics
+} from './driverLocks'; 
