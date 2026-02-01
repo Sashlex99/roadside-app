@@ -928,6 +928,81 @@ const markerStyles = {
 
 ## Session History
 
+### 2026-02-01 - Memory Leak & State Machine Fixes
+
+**Follow-up fixes from robustness review** addressing remaining P1/P2 items.
+
+---
+
+#### Fix 1: Memory Leak Prevention - Listener Limit
+
+**File:** `src/hooks/driver/useDriverOrders.ts`
+**Problem:** Created 1 Firestore listener per active bid with no limit. A driver with 50+ active bids would have 50+ concurrent listeners, causing memory issues.
+
+**Solution:**
+```typescript
+// Added at top of file
+const MAX_BID_LISTENERS = 10;
+
+// In useEffect that creates listeners:
+const bidsToWatch = activeBids.slice(0, MAX_BID_LISTENERS);
+if (activeBids.length > MAX_BID_LISTENERS) {
+  console.log(`⚠️ [useDriverOrders] Limiting order listeners to ${MAX_BID_LISTENERS} (had ${activeBids.length} active bids)`);
+}
+
+const unsubscribers = bidsToWatch.map(orderId => {...});
+```
+
+**Why 10?** Balances between responsiveness (most drivers won't have >10 active bids at once) and resource usage.
+
+---
+
+#### Fix 2: Order State Machine Validation
+
+**File:** `src/services/firestore/orders.ts`
+**Problem:** No validation of status transitions. Invalid states like `completed` → `pending` were technically possible.
+
+**Solution:**
+```typescript
+// Valid transitions map
+const VALID_ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  pending: ['searching', 'cancelled', 'expired'],
+  searching: ['bidding', 'cancelled', 'expired'],
+  bidding: ['payment_pending', 'cancelled', 'expired'],
+  payment_pending: ['accepted', 'bidding', 'cancelled'],  // bidding = payment failed
+  accepted: ['in_progress', 'cancelled'],
+  in_progress: ['completed', 'cancelled'],
+  completed: [],   // Terminal state
+  cancelled: [],   // Terminal state
+  expired: [],     // Terminal state
+};
+
+// In updateOrderStatus():
+const allowedTransitions = VALID_ORDER_TRANSITIONS[currentStatus] || [];
+if (!allowedTransitions.includes(status)) {
+  if (__DEV__) {
+    throw new Error(`Invalid order transition: ${currentStatus} → ${status}`);
+  } else {
+    console.warn(`Invalid transition: ${currentStatus} → ${status} - allowing for backwards compatibility`);
+  }
+}
+```
+
+**Behavior:**
+- **DEV:** Throws error to catch bugs early
+- **PROD:** Logs warning but allows (backwards compatibility while monitoring)
+
+---
+
+#### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/hooks/driver/useDriverOrders.ts` | Added `MAX_BID_LISTENERS = 10` and listener limiting |
+| `src/services/firestore/orders.ts` | Added `VALID_ORDER_TRANSITIONS` map and transition validation |
+
+---
+
 ### 2026-01-30 - System Robustness Review & Security Fixes (Part 2)
 
 **Firestore Security Rules Iteration & Order Completion Popup Fix**
@@ -1249,7 +1324,8 @@ useEffect(() => {
 ```
 
 #### Remaining P1/P2 Items (Future)
-- Listener limits to prevent memory leaks (`useDriverOrders.ts`)
+- ~~Listener limits to prevent memory leaks (`useDriverOrders.ts`)~~ → Fixed 2026-02-01
+- ~~Order state machine validation~~ → Fixed 2026-02-01
 - Deep link payment verification via Stripe API
 - Geohash queries for efficient nearby driver filtering
 - Circuit breaker alerts/monitoring

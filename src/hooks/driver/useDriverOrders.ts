@@ -9,6 +9,10 @@ import { CustomModal as CustomModalType } from '../../types/shared';
 import { PendingOrder } from '../../types/driver';
 import { LocationData } from '../../types/shared';
 
+// ✅ MEMORY LEAK FIX: Limit concurrent Firestore listeners per driver
+// Without this limit, a driver with 50+ active bids would have 50+ listeners
+const MAX_BID_LISTENERS = 10;
+
 interface UseDriverOrdersParams {
   user: any;
   authReady?: boolean;
@@ -307,8 +311,14 @@ export function useDriverOrders({ user, authReady, location, setCustomModal }: U
   // NOTE: Previously had duplicate useEffect with bids subscription - removed to fix double listeners
   useEffect(() => {
     if (!authReady || !user || activeBids.length === 0) return;
-    
-    const unsubscribers = activeBids.map(orderId => {
+
+    // ✅ MEMORY LEAK FIX: Limit number of concurrent listeners
+    const bidsToWatch = activeBids.slice(0, MAX_BID_LISTENERS);
+    if (activeBids.length > MAX_BID_LISTENERS) {
+      console.log(`⚠️ [useDriverOrders] Limiting order listeners to ${MAX_BID_LISTENERS} (had ${activeBids.length} active bids)`);
+    }
+
+    const unsubscribers = bidsToWatch.map(orderId => {
       // Listen to specific order document changes
       const orderRef = doc(db, 'orders', orderId);
       return onSnapshot(orderRef, (docSnapshot) => {
@@ -382,7 +392,7 @@ export function useDriverOrders({ user, authReady, location, setCustomModal }: U
     });
     
     return () => {
-      console.log('🧹 Cleaning up order status subscriptions for activeBids:', activeBids.length);
+      console.log(`🧹 Cleaning up order status subscriptions (${bidsToWatch.length} listeners for ${activeBids.length} active bids)`);
       try {
         unsubscribers.forEach((unsub, index) => {
           if (typeof unsub === 'function') {

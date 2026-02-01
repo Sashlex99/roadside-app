@@ -28,11 +28,25 @@ import { db, auth } from '../../config/firebase';
 import { safeOnSnapshot, safeFirestoreCall } from '../../utils/safeFirestore';
 import { geohashForLocation } from 'geofire-common';
 import { unlockDriver } from './driverLocks';
-import { 
-  Order, 
+import {
+  Order,
   OrderStatus,
   DriverLocation
 } from '../../types/firestore';
+
+// ✅ STATE MACHINE: Valid order status transitions
+// Prevents invalid state changes like completed → pending
+const VALID_ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  pending: ['searching', 'cancelled', 'expired'],
+  searching: ['bidding', 'cancelled', 'expired'],
+  bidding: ['payment_pending', 'cancelled', 'expired'],
+  payment_pending: ['accepted', 'bidding', 'cancelled'],  // bidding = payment failed, can retry
+  accepted: ['in_progress', 'cancelled'],
+  in_progress: ['completed', 'cancelled'],
+  completed: [],   // Terminal state - no transitions allowed
+  cancelled: [],   // Terminal state - no transitions allowed
+  expired: [],     // Terminal state - no transitions allowed
+};
 
 // Collections
 export const COLLECTIONS = {
@@ -427,11 +441,33 @@ export const getOrder = async (orderId: string): Promise<Order | null> => {
 };
 
 /**
- * Update order status
+ * Update order status with state machine validation
+ * ✅ ENHANCED: Validates transitions to prevent invalid state changes
  */
 export const updateOrderStatus = async (orderId: string, status: OrderStatus, additionalData?: Partial<Order>): Promise<void> => {
   try {
     const docRef = doc(db, COLLECTIONS.ORDERS, orderId);
+
+    // ✅ STATE MACHINE: Validate the transition is allowed
+    const currentDoc = await getDoc(docRef);
+    if (currentDoc.exists()) {
+      const currentStatus = currentDoc.data().status as OrderStatus;
+      const allowedTransitions = VALID_ORDER_TRANSITIONS[currentStatus] || [];
+
+      if (!allowedTransitions.includes(status)) {
+        const errorMsg = `Invalid order transition: ${currentStatus} → ${status} (allowed: ${allowedTransitions.join(', ') || 'none'})`;
+
+        if (__DEV__) {
+          // In development, throw to catch bugs early
+          console.error(`❌ [FIRESTORE] ${errorMsg}`);
+          throw new Error(errorMsg);
+        } else {
+          // In production, log warning but allow for backwards compatibility
+          // This prevents breaking changes while we monitor for issues
+          console.warn(`⚠️ [FIRESTORE] ${errorMsg} - allowing for backwards compatibility`);
+        }
+      }
+    }
 
     // Build update data
     const updateData: Record<string, any> = {
