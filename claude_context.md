@@ -229,14 +229,27 @@ useEffect(() => {
 
 #### Payment Flow
 ```
-Accept bid → Bid reserved → Payment Sheet opens →
+Accept bid → Confirmation Modal (fee breakdown) → User confirms →
+Bid reserved (driver locked) → Payment Sheet opens →
 Apple Pay / Google Pay / Card → Payment succeeds →
 processPayment() called → Order status = 'accepted' →
 Driver sees job, client sees tracking
 ```
 
+**Payment Confirmation Modal:**
+Before the Payment Sheet opens, a confirmation modal shows:
+- Total bid amount (e.g., "200.00 EUR")
+- Platform fee breakdown (15% = 30.00 EUR)
+- Amount to pay driver (170.00 EUR)
+- 5-minute payment window warning
+
+This ensures:
+1. User sees full cost transparency before committing
+2. Driver is only locked AFTER user confirms (no wasted resources)
+3. Clear expectations about the payment split
+
 **Key Files:**
-- `src/hooks/client/useClientPayments.ts` - Payment orchestration
+- `src/hooks/client/useClientPayments.ts` - Payment orchestration & confirmation modal
 - `src/hooks/usePaymentSheet.ts` - Stripe Payment Sheet
 - `functions/src/payments.ts` - Server-side processing
 
@@ -927,6 +940,67 @@ const markerStyles = {
 ---
 
 ## Session History
+
+### 2026-02-01 - Payment Confirmation Modal
+
+**UX improvement** for payment transparency before committing.
+
+#### New Feature: Payment Confirmation Modal
+
+**File:** `src/hooks/client/useClientPayments.ts`
+
+**Problem:** Users didn't see the fee breakdown before payment. The Payment Sheet opened immediately after tapping "Accept bid", and the driver was locked even if the user changed their mind.
+
+**Solution:** Added a confirmation modal that appears BEFORE the Payment Sheet:
+
+```
+┌─────────────────────────────────────┐
+│     Потвърдете плащането            │
+│                                     │
+│  Обща сума: 200.00 EUR              │
+│                                     │
+│  Сега плащате 15% платформена       │
+│  такса (30.00 EUR), а останалите    │
+│  170.00 EUR плащате на шофьора.     │
+│                                     │
+│  ⏱️ Ще имате 5 мин да направите     │
+│     плащането                       │
+│                                     │
+│  [Отказ]  [Продължи към плащане]    │
+└─────────────────────────────────────┘
+```
+
+**Implementation:**
+```typescript
+// Added constant for platform fee
+const PLATFORM_FEE_PERCENTAGE = 0.15;
+
+// Helper function that returns Promise<boolean>
+const showPaymentConfirmation = (totalBid, platformFee, driverPayment): Promise<boolean> => {
+  return new Promise((resolve) => {
+    paymentConfirmResolveRef.current = resolve;
+    setCustomModal({
+      title: 'Потвърдете плащането',
+      message: `Обща сума: ${totalBid} EUR\n\n15% такса (${platformFee} EUR)...`,
+      buttons: [
+        { text: 'Отказ', onPress: () => resolve(false) },
+        { text: 'Продължи към плащане', onPress: () => resolve(true) }
+      ]
+    });
+  });
+};
+
+// In confirmAcceptBid() - BEFORE reserveBid():
+const confirmed = await showPaymentConfirmation(totalBid, platformFee, driverPayment);
+if (!confirmed) return;  // User cancelled - no lock acquired
+```
+
+**Key Benefits:**
+1. Full cost transparency before committing
+2. Driver only locked AFTER user confirms (saves resources)
+3. 5-minute warning sets clear expectations
+
+---
 
 ### 2026-02-01 - Memory Leak & State Machine Fixes
 
