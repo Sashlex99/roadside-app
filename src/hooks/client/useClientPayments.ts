@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { Linking, AppState } from 'react-native';
 import { reserveBid, confirmBid, cancelBidReservation, updateOrderStatus } from '../../services/firestore';
 import { createPaymentLinkWithToken } from '../../services/customStripeService';
@@ -7,6 +7,9 @@ import { CustomModal as CustomModalType } from '../../types/shared';
 import { PaymentModal } from '../../types/client';
 import { colors } from '../../constants/colors';
 import { usePaymentSheet } from '../usePaymentSheet';
+
+// Platform fee percentage (15%)
+const PLATFORM_FEE_PERCENTAGE = 0.15;
 
 interface UseClientPaymentsParams {
   user: any;
@@ -51,6 +54,46 @@ export function useClientPayments({
   // These refs always hold the current values, unlike state which gets captured at setTimeout creation
   const activeOrderRef = useRef(activeOrder);
   const paymentModalVisibleRef = useRef(paymentModal.visible);
+
+  // Ref to store the payment confirmation modal resolve function
+  const paymentConfirmResolveRef = useRef<((confirmed: boolean) => void) | null>(null);
+
+  /**
+   * Show payment confirmation modal with fee breakdown
+   * Returns a Promise that resolves to true if user confirms, false if cancelled
+   */
+  const showPaymentConfirmation = (totalBid: number, platformFee: number, driverPayment: number): Promise<boolean> => {
+    return new Promise((resolve) => {
+      paymentConfirmResolveRef.current = resolve;
+
+      setCustomModal({
+        visible: true,
+        title: 'Потвърдете плащането',
+        icon: 'card-outline',
+        iconColor: colors.primary,
+        message: `Обща сума: ${totalBid.toFixed(2)} EUR\n\nСега плащате 15% платформена такса (${platformFee.toFixed(2)} EUR), а останалите ${driverPayment.toFixed(2)} EUR плащате на шофьора.\n\n⏱️ Ще имате 5 мин да направите плащането`,
+        buttons: [
+          {
+            text: 'Отказ',
+            style: 'cancel',
+            onPress: () => {
+              setCustomModal(prev => ({ ...prev, visible: false }));
+              paymentConfirmResolveRef.current?.(false);
+              paymentConfirmResolveRef.current = null;
+            }
+          },
+          {
+            text: 'Продължи към плащане',
+            onPress: () => {
+              setCustomModal(prev => ({ ...prev, visible: false }));
+              paymentConfirmResolveRef.current?.(true);
+              paymentConfirmResolveRef.current = null;
+            }
+          }
+        ]
+      });
+    });
+  };
 
   // ✅ FIXED: Cleanup all timers on unmount to prevent memory leaks
   useEffect(() => {
@@ -455,7 +498,21 @@ export function useClientPayments({
       return;
     }
 
-    // Start loading state
+    // Calculate payment breakdown
+    const totalBid = selectedBid.proposedPrice;
+    const platformFee = Math.round(totalBid * PLATFORM_FEE_PERCENTAGE * 100) / 100;
+    const driverPayment = Math.round((totalBid - platformFee) * 100) / 100;
+
+    console.log('💰 Payment breakdown:', { totalBid, platformFee, driverPayment });
+
+    // Show confirmation modal BEFORE reserving (so we don't lock driver unnecessarily)
+    const confirmed = await showPaymentConfirmation(totalBid, platformFee, driverPayment);
+    if (!confirmed) {
+      console.log('ℹ️ User cancelled payment confirmation');
+      return;
+    }
+
+    // Start loading state (after user confirms)
     setAcceptingBid(true);
     setAcceptingBidId(bidId);
 
@@ -467,7 +524,7 @@ export function useClientPayments({
     });
 
     try {
-      // 1. Reserve bid в Firestore (Phase 1)
+      // 1. Reserve bid в Firestore (Phase 1) - locks the driver
       console.log('📝 Step 1: Reserving bid in Firestore...');
       await reserveBid(activeOrder.id, bidId);
       console.log('✅ Step 1: Bid reserved successfully');
