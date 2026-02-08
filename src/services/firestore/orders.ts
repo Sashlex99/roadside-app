@@ -41,7 +41,7 @@ const VALID_ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   searching: ['bidding', 'cancelled', 'expired'],
   bidding: ['payment_pending', 'cancelled', 'expired'],
   payment_pending: ['accepted', 'bidding', 'cancelled'],  // bidding = payment failed, can retry
-  accepted: ['in_progress', 'cancelled'],
+  accepted: ['in_progress', 'completed', 'cancelled'],  // completed allowed directly (no separate "start job" step)
   in_progress: ['completed', 'cancelled'],
   completed: [],   // Terminal state - no transitions allowed
   cancelled: [],   // Terminal state - no transitions allowed

@@ -200,24 +200,64 @@ export function handlePaymentError(error: any): string {
 export async function createPaymentLink(data: PaymentLinkData): Promise<PaymentLinkResponse> {
   try {
     console.log('🔗 Creating payment link:', data);
-    
+
     const createPaymentLinkFunction = httpsCallable(functions, 'createPaymentLink');
     const result = await createPaymentLinkFunction(data);
-    
+
     const response = result.data as PaymentLinkResponse;
-    
+
     console.log('✅ Payment link created:', {
       paymentLinkId: response.paymentLinkId,
       paymentUrl: response.paymentUrl
     });
-    
+
     return response;
   } catch (error) {
     console.error('❌ Error creating payment link:', error);
     throw new Error(
-      error instanceof Error 
+      error instanceof Error
         ? `Failed to create payment link: ${error.message}`
         : 'Failed to create payment link'
+    );
+  }
+}
+
+/**
+ * Payment verification response from backend
+ */
+export interface PaymentVerificationResponse {
+  success: boolean;
+  alreadyProcessed: boolean;
+}
+
+/**
+ * Verifies payment link completion via backend Stripe API call
+ * Called from deep link handler to verify payment before confirming order
+ * @param orderId - The order ID to verify
+ * @param sessionId - The Stripe Checkout Session ID from deep link
+ * @returns Verification result
+ */
+export async function verifyPaymentLinkWithStripe(
+  orderId: string,
+  sessionId: string
+): Promise<PaymentVerificationResponse> {
+  try {
+    console.log('🔍 Verifying payment link:', { orderId, sessionId });
+
+    const verifyPaymentFunction = httpsCallable(functions, 'verifyPaymentLink');
+    const result = await verifyPaymentFunction({ orderId, sessionId });
+
+    const response = result.data as PaymentVerificationResponse;
+
+    console.log('✅ Payment verification result:', response);
+
+    return response;
+  } catch (error) {
+    console.error('❌ Error verifying payment:', error);
+    throw new Error(
+      error instanceof Error
+        ? `Payment verification failed: ${error.message}`
+        : 'Payment verification failed'
     );
   }
 } 

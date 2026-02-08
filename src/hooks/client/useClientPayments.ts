@@ -2,6 +2,7 @@
 import { Linking, AppState } from 'react-native';
 import { reserveBid, confirmBid, cancelBidReservation, updateOrderStatus } from '../../services/firestore';
 import { createPaymentLinkWithToken } from '../../services/customStripeService';
+import { verifyPaymentLinkWithStripe } from '../../services/stripeService';
 import { ensureDriverNotification } from '../../utils/driverNotifications';
 import { CustomModal as CustomModalType } from '../../types/shared';
 import { PaymentModal } from '../../types/client';
@@ -176,72 +177,95 @@ export function useClientPayments({
       
       if (url.includes('payment-success')) {
         console.log('🔗 Payment success deep link received:', url);
-        
+
         // ✅ FIXED: Clear timeout when payment is successful
         if (paymentTimeoutRef.current) {
           clearTimeout(paymentTimeoutRef.current);
           paymentTimeoutRef.current = null;
         }
         isPaymentModalActiveRef.current = false;
-        
-        // Confirm the bid (Phase 2) - only if we have a reserved bid
-        const reservedBidId = activeOrder?.reservedBidId;
-        const reservedDriverId = activeOrder?.reservedDriverId;
-        
-        if (reservedBidId && reservedDriverId) {
-          console.log('🔄 Confirming bid after payment success:', { orderId: activeOrder.id, bidId: reservedBidId });
-          
-          confirmBid(activeOrder.id, reservedBidId).then(() => {
-            console.log('✅ Bid confirmed successfully');
 
-            // ✅ Ensure driver notification as a fallback (using static import to avoid rebundle)
-            ensureDriverNotification(reservedDriverId, activeOrder.id).then(result => {
-              if (result.success) {
-                console.log('✅ Driver notification ensured:', result.alreadyNotified ? 'already notified' : 'notification triggered');
-              } else {
-                console.log('ℹ️ Driver notification skipped (non-critical):', result.error);
-              }
-            });
-          }).catch(error => {
-            console.error('Error confirming bid after payment:', error);
-
-            // ✅ ENHANCED: Even if bid confirmation fails, try to ensure driver notification
-            console.log('🔄 Bid confirmation failed, trying fallback driver notification...');
-            ensureDriverNotification(reservedDriverId, activeOrder.id).then(result => {
-              if (result.success) {
-                console.log('✅ Driver notification ensured via fallback:', result.alreadyNotified ? 'already notified' : 'notification triggered');
-              } else {
-                console.warn('⚠️ Fallback driver notification also failed:', result.error);
-              }
-            });
-          });
-        } else {
-          console.log('⚠️ No reserved bid or driver found for payment success confirmation');
-        }
-        
-        // Close payment modal - payment was successful
+        // Close payment modal immediately for better UX
         setPaymentModal({ visible: false, amount: 0, paymentUrl: '', driverName: '', totalAmount: 0 });
         setPaymentInProgress(false);
         setAcceptingBid(false);
         setAcceptingBidId(null);
 
-        // Show success modal with amount if available
+        // Extract parameters from URL
         const urlParams = new URLSearchParams(url.split('?')[1]);
+        const sessionId = urlParams.get('session_id');
+        const orderId = urlParams.get('orderId');
         const amount = urlParams.get('amount');
 
-        setCustomModal({
-          visible: true,
-          title: 'Плащането е успешно!',
-          message: amount
-            ? `Платихте ${parseFloat(amount).toFixed(2)} EUR платформена такса. Шофьорът ще се свърже с вас скоро.`
-            : 'Поръчката е потвърдена. Шофьорът ще се свърже с вас скоро.',
-          icon: 'checkmark-circle',
-          iconColor: '#10B981',
-          buttons: [{
-            text: 'Добре',
-            onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
-          }]
-        });
+        // ✅ SECURITY: Verify payment with Stripe API before confirming
+        if (sessionId && orderId) {
+          console.log('🔍 Verifying payment with Stripe API...', { orderId, sessionId });
+
+          verifyPaymentLinkWithStripe(orderId, sessionId)
+            .then(result => {
+              if (result.success) {
+                console.log('✅ Payment verified:', result.alreadyProcessed ? 'already processed' : 'newly confirmed');
+
+                // Ensure driver notification
+                if (activeOrder?.reservedDriverId) {
+                  ensureDriverNotification(activeOrder.reservedDriverId, orderId).then(notifResult => {
+                    if (notifResult.success) {
+                      console.log('✅ Driver notification ensured:', notifResult.alreadyNotified ? 'already notified' : 'notification triggered');
+                    } else {
+                      console.log('ℹ️ Driver notification skipped (non-critical):', notifResult.error);
+                    }
+                  });
+                }
+
+                // Show success modal
+                setCustomModal({
+                  visible: true,
+                  title: 'Плащането е успешно!',
+                  message: amount
+                    ? `Платихте ${parseFloat(amount).toFixed(2)} EUR платформена такса. Шофьорът ще се свърже с вас скоро.`
+                    : 'Поръчката е потвърдена. Шофьорът ще се свърже с вас скоро.',
+                  icon: 'checkmark-circle',
+                  iconColor: '#10B981',
+                  buttons: [{
+                    text: 'Добре',
+                    onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
+                  }]
+                });
+              }
+            })
+            .catch(error => {
+              console.error('❌ Payment verification failed:', error);
+
+              // Show pending message - webhook may still process it
+              setCustomModal({
+                visible: true,
+                title: 'Плащането се обработва',
+                message: 'Плащането ви се проверява. Ще бъдете уведомени, когато бъде потвърдено.',
+                icon: 'time-outline',
+                iconColor: '#FF9500',
+                buttons: [{
+                  text: 'Добре',
+                  onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
+                }]
+              });
+            });
+        } else {
+          // No sessionId - legacy URL or verification not possible
+          // Show pending message, rely on webhook
+          console.log('⚠️ No session_id in deep link, relying on webhook for confirmation');
+
+          setCustomModal({
+            visible: true,
+            title: 'Плащането се обработва',
+            message: 'Плащането ви се обработва. Ще бъдете уведомени, когато бъде потвърдено.',
+            icon: 'time-outline',
+            iconColor: '#FF9500',
+            buttons: [{
+              text: 'Добре',
+              onPress: () => setCustomModal(prev => ({ ...prev, visible: false }))
+            }]
+          });
+        }
       }
       
       // Handle payment cancellation/failure

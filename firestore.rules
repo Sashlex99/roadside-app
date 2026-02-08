@@ -160,6 +160,13 @@ service cloud.firestore {
       allow write: if false;
     }
     
+    // 📍 Regional cache for nearby drivers (N+1 optimization)
+    // Read-only for clients, only Cloud Functions (Admin SDK) can write
+    match /nearbyDriversCache/{regionId} {
+      allow read: if isAuthenticated();
+      allow write: if false;  // Only Admin SDK (Cloud Functions)
+    }
+
     // 🔒 NEW: Driver locks collection for atomic locking
     match /driverLocks/{driverId} {
       // Allow authenticated users to read/write locks

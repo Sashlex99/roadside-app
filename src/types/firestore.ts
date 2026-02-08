@@ -176,10 +176,29 @@ export interface DriverLocation {
   driverId: string;
   orderId?: string; // ако шофьорът е в активна поръчка
   location: OrderLocation;
+  geohash?: string;        // Full geohash for precise location (precision 9, ~4.77m)
+  geohashPrefix?: string;  // First 4 chars for regional grouping (~20km cells)
   heading?: number; // посока на движение
   speed?: number; // скорост км/ч
   isOnline?: boolean; // дали шофьорът е онлайн и може да получава поръчки
   timestamp: Date;
+}
+
+// Regional cache for nearby drivers optimization (N+1 fix)
+export interface RegionalDriverCache {
+  regionId: string;           // 4-char geohash prefix (e.g., "u8gh")
+  drivers: DriverSummary[];   // Compressed driver array
+  driverCount: number;
+  updatedAt: Date;
+}
+
+// Compact driver info for regional cache
+export interface DriverSummary {
+  id: string;
+  lat: number;
+  lng: number;
+  heading?: number;
+  ts: number;  // Unix timestamp (compact)
 }
 
 // Analytics and reporting

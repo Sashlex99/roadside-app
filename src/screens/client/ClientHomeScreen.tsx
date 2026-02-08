@@ -32,7 +32,7 @@ import { LocationData, CustomModal as CustomModalType } from '../../types/shared
 import { useCurrentLocation } from '../../hooks/shared/useCurrentLocation';
 import { useClientOrders } from '../../hooks/client/useClientOrders';
 import { useClientPayments } from '../../hooks/client/useClientPayments';
-import { useNearbyDrivers } from '../../hooks/client/useNearbyDrivers';
+import { useNearbyDriversOptimized as useNearbyDrivers } from '../../hooks/client/useNearbyDriversOptimized';
 import { useDriverTracking } from '../../hooks/client/useDriverTracking';
 import { useDriverETA } from '../../hooks/client/useDriverETA';
 import { generateMapHTML, formatTimeRemaining, createCancelOrderHandler } from '../../utils/client/helpers';

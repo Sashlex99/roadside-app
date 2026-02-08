@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
+import { geohashForLocation } from 'geofire-common';
 import { updateDriverLocation } from '../../services/firestore/locations';
 import { DriverLocation } from '../../types/firestore';
 import { LocationData } from '../../types/shared';
@@ -45,6 +46,10 @@ export function useDriverLocationPublisher({
     }
 
     try {
+      // Compute geohash for efficient regional queries (N+1 optimization)
+      const geohash = geohashForLocation([location.latitude, location.longitude], 9);
+      const geohashPrefix = geohash.substring(0, 4); // ~20km cells for regional grouping
+
       const driverLocation: DriverLocation = {
         driverId,
         location: {
@@ -52,6 +57,8 @@ export function useDriverLocationPublisher({
           longitude: location.longitude,
           address: location.address || '',
         },
+        geohash,
+        geohashPrefix,
         isOnline: true,
         timestamp: new Date(),
         ...(activeOrderId && { orderId: activeOrderId }),
@@ -77,13 +84,21 @@ export function useDriverLocationPublisher({
     if (!driverId) return;
 
     try {
+      // Compute geohash if location available
+      const lat = location?.latitude || 0;
+      const lng = location?.longitude || 0;
+      const geohash = lat && lng ? geohashForLocation([lat, lng], 9) : undefined;
+      const geohashPrefix = geohash?.substring(0, 4);
+
       const offlineLocation: DriverLocation = {
         driverId,
         location: {
-          latitude: location?.latitude || 0,
-          longitude: location?.longitude || 0,
+          latitude: lat,
+          longitude: lng,
           address: location?.address || '',
         },
+        geohash,
+        geohashPrefix,
         isOnline: false,
         timestamp: new Date(),
       };

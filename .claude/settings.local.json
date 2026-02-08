@@ -27,7 +27,25 @@
       "Bash(chmod:*)",
       "Bash(npm install:*)",
       "Bash(npm:*)",
-      "Bash(node --version)"
+      "Bash(node --version)",
+      "Bash(git push:*)",
+      "Bash(firebase functions:list:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(firebase deploy:*)",
+      "Bash(npx tsc:*)",
+      "Bash(node:*)",
+      "Bash(firebase login:*)",
+      "Bash(firebase projects:list:*)",
+      "Bash(firebase --version:*)",
+      "Bash(firebase login:list:*)",
+      "Bash(firebase functions:delete:*)",
+      "Bash(nslookup:*)",
+      "Bash(curl:*)",
+      "Bash(timeout 15 node:*)",
+      "Bash(timeout 20 node:*)",
+      "Bash(FUNCTIONS_DISCOVERY_TIMEOUT=60000 firebase deploy:*)",
+      "Bash(git log:*)"
     ]
   }
 }

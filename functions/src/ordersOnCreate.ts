@@ -1,4 +1,4 @@
-import * as functions from 'firebase-functions/v1';
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
 import { geohashQueryBounds, distanceBetween } from 'geofire-common';
 
@@ -26,12 +26,13 @@ interface DriverLocationDoc {
   timestamp: FirebaseFirestore.Timestamp;
 }
 
-export const onOrderCreate = functions
-  .region('europe-west3')
-  .firestore
-  .document('orders/{orderId}')
-  .onCreate(async (snap: admin.firestore.DocumentSnapshot, context: functions.EventContext) => {
-    const orderId = context.params.orderId as string;
+export const onOrderCreate = onDocumentCreated(
+  { document: 'orders/{orderId}', region: 'europe-west3' },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+
+    const orderId = event.params.orderId;
     const data = snap.data();
     if (!data) return;
 
@@ -57,8 +58,8 @@ export const onOrderCreate = functions
     const snapshots = await Promise.all(queries.map((q) => q.get()));
 
     // Flatten docs
-    snapshots.forEach((snap) => {
-      snap.docs.forEach((doc) => {
+    snapshots.forEach((querySnap) => {
+      querySnap.docs.forEach((doc) => {
         const driverLoc = doc.data() as DriverLocationDoc;
         const { driverId, location: driverLocation } = driverLoc;
         if (!driverLocation) return;
@@ -126,4 +127,5 @@ export const onOrderCreate = functions
 
     // Save list of notified drivers to order doc to avoid duplicates later
     await snap.ref.update({ notifiedDrivers });
-  }); 
+  }
+);

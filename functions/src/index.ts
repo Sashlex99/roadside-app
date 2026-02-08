@@ -1,20 +1,4 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * import {onCall} from "firebase-functions/v2/https";
- * import {onDocumentWritten} from "firebase-functions/v2/firestore";
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
-
-// Start writing functions
-// https://firebase.google.com/docs/functions/typescript
-
-// export const helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
-
+// Order trigger functions
 export { onOrderCreate } from './ordersOnCreate';
 
 // Push notification functions
@@ -22,13 +6,21 @@ export { onBidCreateNotification, onBidAcceptedNotification, sendTestNotificatio
 
 // Payment functions
 export { createPaymentIntent, processPayment, handleStripeWebhook, createPaymentLink } from './payments';
-export { createPaymentLinkHTTP, createPaymentLinkTest, handlePaymentLinkWebhook } from './customPayments';
+export { createPaymentLinkHTTP, createPaymentLinkTest, handlePaymentLinkWebhook, verifyPaymentLink } from './customPayments';
 
-// 🧹 Driver lock cleanup functions
-// TEMPORARILY DISABLED - Firebase v2 scheduled functions have container issues
-// TODO: Fix initialization and re-enable
-// export {
-//   cleanupExpiredDriverLocks,
-//   manualCleanupDriverLocks,
-//   getDriverLockStats
-// } from './cleanupDriverLocks';
+// Driver lock cleanup functions (v2 scheduled - now fixed with correct region)
+export {
+  cleanupExpiredDriverLocks,
+  manualCleanupDriverLocks,
+  getDriverLockStats
+} from './cleanupDriverLocks';
+
+// Regional cache functions (N+1 optimization for nearby drivers)
+export {
+  updateRegionalCaches,
+  manualRefreshRegionalCaches,
+  getRegionalCacheStats
+} from './regionCacheUpdater';
+
+// Migration functions (one-time use)
+export { backfillDriverGeohash } from './migrations/backfillGeohash';

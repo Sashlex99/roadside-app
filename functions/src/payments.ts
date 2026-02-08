@@ -1,15 +1,6 @@
-import * as functions from 'firebase-functions/v1';
+import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import Stripe from 'stripe';
-
-// Initialize Stripe with secret key
-const stripeSecretKey = functions.config().stripe?.secret_key || process.env.STRIPE_SECRET_KEY;
-
-if (!stripeSecretKey) {
-  console.error('❌ STRIPE SECRET KEY NOT CONFIGURED!');
-}
-
-const stripe = new Stripe(stripeSecretKey || 'sk_test_placeholder');
 
 // Initialize admin if not already initialized
 if (!admin.apps.length) {
@@ -18,43 +9,54 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
+// Lazy Stripe initialization (secrets not available at module load time in v2)
+let _stripe: Stripe | null = null;
+function getStripe(): Stripe {
+  if (!_stripe) {
+    _stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder');
+  }
+  return _stripe;
+}
+
 /**
  * Creates a Stripe Payment Intent for platform fee payment (15% of bid)
  * Returns data needed for Payment Sheet (Apple Pay / Google Pay)
  */
-export const createPaymentIntent = functions
-  .region('europe-west3')
-  .https.onCall(async (data, context) => {
-    console.log('🚀 createPaymentIntent called with:', JSON.stringify(data));
+export const createPaymentIntent = onCall(
+  { region: 'europe-west3' },
+  async (request) => {
+    console.log('🚀 createPaymentIntent called with:', JSON.stringify(request.data));
 
     // Verify authentication
-    if (!context.auth) {
+    if (!request.auth) {
       console.error('❌ User not authenticated');
-      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+      throw new HttpsError('unauthenticated', 'User must be authenticated');
     }
 
-    const { orderId, bidId, bidAmount, driverId, clientId } = data;
+    const { orderId, bidId, bidAmount, driverId, clientId } = request.data;
 
     // Validate input
     if (!orderId || !bidId || !bidAmount || !driverId || !clientId) {
       console.error('❌ Missing required fields:', { orderId, bidId, bidAmount, driverId, clientId });
-      throw new functions.https.HttpsError('invalid-argument', 'Missing required payment data');
+      throw new HttpsError('invalid-argument', 'Missing required payment data');
     }
 
     try {
+      const stripe = getStripe();
+
       // 1. Verify order exists and belongs to this client
       console.log('📋 Step 1: Verifying order...');
       const orderDoc = await db.collection('orders').doc(orderId).get();
 
       if (!orderDoc.exists) {
         console.error('❌ Order not found:', orderId);
-        throw new functions.https.HttpsError('not-found', 'Order not found');
+        throw new HttpsError('not-found', 'Order not found');
       }
 
       const order = orderDoc.data();
-      if (order?.clientId !== context.auth.uid) {
-        console.error('❌ User not authorized for order:', { orderClientId: order?.clientId, authUid: context.auth.uid });
-        throw new functions.https.HttpsError('permission-denied', 'User not authorized for this order');
+      if (order?.clientId !== request.auth.uid) {
+        console.error('❌ User not authorized for order:', { orderClientId: order?.clientId, authUid: request.auth.uid });
+        throw new HttpsError('permission-denied', 'User not authorized for this order');
       }
       console.log('✅ Order verified');
 
@@ -64,7 +66,7 @@ export const createPaymentIntent = functions
 
       if (!bidDoc.exists) {
         console.error('❌ Bid not found:', bidId);
-        throw new functions.https.HttpsError('not-found', 'Bid not found');
+        throw new HttpsError('not-found', 'Bid not found');
       }
       console.log('✅ Bid verified');
 
@@ -83,7 +85,7 @@ export const createPaymentIntent = functions
       // Minimum amount check (Stripe requires at least 50 cents for EUR)
       if (platformFeeAmount < 50) {
         console.error('❌ Amount too low:', platformFeeAmount);
-        throw new functions.https.HttpsError('invalid-argument', 'Payment amount too low (minimum 0.50 EUR)');
+        throw new HttpsError('invalid-argument', 'Payment amount too low (minimum 0.50 EUR)');
       }
 
       // 4. Get or create Stripe customer
@@ -188,43 +190,46 @@ export const createPaymentIntent = functions
         type: error.type,
       });
 
-      if (error instanceof functions.https.HttpsError) {
+      if (error instanceof HttpsError) {
         throw error;
       }
 
       if (error.type === 'StripeInvalidRequestError') {
         console.error('❌ Stripe Invalid Request:', error.message);
-        throw new functions.https.HttpsError('invalid-argument', `Stripe error: ${error.message}`);
+        throw new HttpsError('invalid-argument', `Stripe error: ${error.message}`);
       }
 
-      throw new functions.https.HttpsError('internal', 'Failed to create payment intent');
+      throw new HttpsError('internal', 'Failed to create payment intent');
     }
-  });
+  }
+);
 
 /**
  * Processes successful payment and updates order status
  */
-export const processPayment = functions
-  .region('europe-west3')
-  .https.onCall(async (data, context) => {
-    console.log('🚀 processPayment called with:', JSON.stringify(data));
+export const processPayment = onCall(
+  { region: 'europe-west3' },
+  async (request) => {
+    console.log('🚀 processPayment called with:', JSON.stringify(request.data));
 
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'User must be authenticated');
     }
 
-    const { paymentIntentId, orderId, bidId } = data;
+    const { paymentIntentId, orderId, bidId } = request.data;
 
     if (!paymentIntentId || !orderId || !bidId) {
-      throw new functions.https.HttpsError('invalid-argument', 'Missing required data');
+      throw new HttpsError('invalid-argument', 'Missing required data');
     }
 
     try {
+      const stripe = getStripe();
+
       // Verify payment succeeded
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
       if (paymentIntent.status !== 'succeeded') {
-        throw new functions.https.HttpsError(
+        throw new HttpsError(
           'failed-precondition',
           `Payment not successful. Status: ${paymentIntent.status}`
         );
@@ -233,13 +238,13 @@ export const processPayment = functions
       // Get the bid to retrieve driverId
       const bidDoc = await db.collection('bids').doc(bidId).get();
       if (!bidDoc.exists) {
-        throw new functions.https.HttpsError('not-found', 'Bid not found');
+        throw new HttpsError('not-found', 'Bid not found');
       }
       const bidData = bidDoc.data();
       const driverId = bidData?.driverId;
 
       if (!driverId) {
-        throw new functions.https.HttpsError('invalid-argument', 'Bid has no driverId');
+        throw new HttpsError('invalid-argument', 'Bid has no driverId');
       }
 
       // Update payment record
@@ -281,22 +286,23 @@ export const processPayment = functions
     } catch (error: any) {
       console.error('❌ processPayment ERROR:', error.message);
 
-      if (error instanceof functions.https.HttpsError) {
+      if (error instanceof HttpsError) {
         throw error;
       }
 
-      throw new functions.https.HttpsError('internal', 'Failed to process payment');
+      throw new HttpsError('internal', 'Failed to process payment');
     }
-  });
+  }
+);
 
 /**
  * Stripe webhook handler
  */
-export const handleStripeWebhook = functions
-  .region('europe-west3')
-  .https.onRequest(async (req, res) => {
+export const handleStripeWebhook = onRequest(
+  { region: 'europe-west3' },
+  async (req, res) => {
     const sig = req.headers['stripe-signature'] as string;
-    const webhookSecret = functions.config().stripe?.webhook_secret || process.env.STRIPE_WEBHOOK_SECRET;
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
     if (!webhookSecret) {
       console.error('❌ Webhook secret not configured');
@@ -307,6 +313,7 @@ export const handleStripeWebhook = functions
     let event: Stripe.Event;
 
     try {
+      const stripe = getStripe();
       event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
     } catch (err: any) {
       console.error('❌ Webhook signature verification failed:', err.message);
@@ -326,25 +333,28 @@ export const handleStripeWebhook = functions
     }
 
     res.json({ received: true });
-  });
+  }
+);
 
 /**
  * Creates a simple payment link (alternative method)
  */
-export const createPaymentLink = functions
-  .region('europe-west3')
-  .https.onCall(async (data, context) => {
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+export const createPaymentLink = onCall(
+  { region: 'europe-west3' },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'User must be authenticated');
     }
 
-    const { orderId, amount, driverName } = data;
+    const { orderId, amount, driverName } = request.data;
 
     if (!orderId || !amount || !driverName) {
-      throw new functions.https.HttpsError('invalid-argument', 'Missing required data');
+      throw new HttpsError('invalid-argument', 'Missing required data');
     }
 
     try {
+      const stripe = getStripe();
+
       // Create a product first
       const product = await stripe.products.create({
         name: 'Platform Fee - Roadside Assistance',
@@ -366,7 +376,7 @@ export const createPaymentLink = functions
         }],
         metadata: {
           orderId,
-          clientId: context.auth.uid,
+          clientId: request.auth.uid,
         },
       });
 
@@ -378,6 +388,7 @@ export const createPaymentLink = functions
 
     } catch (error: any) {
       console.error('❌ createPaymentLink ERROR:', error.message);
-      throw new functions.https.HttpsError('internal', 'Failed to create payment link');
+      throw new HttpsError('internal', 'Failed to create payment link');
     }
-  });
+  }
+);
