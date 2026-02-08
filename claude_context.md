@@ -40,8 +40,9 @@ npx expo start --dev-client --tunnel
 |---------|---------|--------|
 | Firebase Firestore | Real-time NoSQL database | `europe-west3` (Frankfurt) |
 | Firebase Auth | User authentication | - |
-| Firebase Cloud Functions | Serverless backend | `europe-west3` |
+| Firebase Cloud Functions v2 | Serverless backend (migrated from v1) | `europe-west3` |
 | Firebase Storage | Image uploads | - |
+| firebase-functions | v7.0.5 (latest v2 modular syntax) | - |
 
 ### Payments
 | Technology | Purpose | Key Files |
@@ -109,7 +110,8 @@ roadside-assistance-travel/
 │   │   │   ├── useClientPayments.ts   # Payment flow orchestration
 │   │   │   ├── useDriverETA.ts        # ETA calculation
 │   │   │   ├── useDriverTracking.ts   # Real-time driver location
-│   │   │   └── useNearbyDrivers.ts    # Nearby drivers subscription
+│   │   │   ├── useNearbyDrivers.ts    # Nearby drivers subscription
+│   │   │   └── useNearbyDriversOptimized.ts  # N+1 optimized version (regional caching)
 │   │   ├── driver/
 │   │   │   ├── useDriverOrders.ts     # Available orders
 │   │   │   └── useDriverLocationPublisher.ts  # Location broadcasting
@@ -148,12 +150,17 @@ roadside-assistance-travel/
 │       ├── timeoutUtils.ts
 │       └── alertingSystem.ts
 │
-├── functions/                         # Firebase Cloud Functions
+├── functions/                         # Firebase Cloud Functions (v2)
 │   └── src/
-│       ├── index.ts                   # Function exports
-│       ├── payments.ts                # Payment processing
-│       ├── notifications.ts           # Push notifications
-│       └── ordersOnCreate.ts          # Order triggers
+│       ├── index.ts                   # Function exports (16+ functions)
+│       ├── payments.ts                # Payment processing (onCall, onRequest)
+│       ├── customPayments.ts          # Payment links & webhooks
+│       ├── notifications.ts           # Push notifications (onDocumentCreated)
+│       ├── ordersOnCreate.ts          # Order triggers
+│       ├── cleanupDriverLocks.ts      # Scheduled lock cleanup (onSchedule)
+│       ├── regionCacheUpdater.ts      # N+1 optimization caching (onSchedule)
+│       └── migrations/
+│           └── backfillGeohash.ts     # One-time geohash migration
 │
 ├── admin-panel/                       # Separate React admin app
 │
@@ -291,7 +298,7 @@ Available orders appear in list
 - `src/screens/driver/DriverHomeScreen.tsx` - Main driver screen
 - `src/hooks/driver/useDriverLocationPublisher.ts` - Location broadcasting
 
-**Code Example - Location Publishing:**
+**Code Example - Location Publishing with Geohash:**
 ```typescript
 // src/hooks/driver/useDriverLocationPublisher.ts
 export function useDriverLocationPublisher({
@@ -300,23 +307,54 @@ export function useDriverLocationPublisher({
   location,
   activeOrderId
 }: UseDriverLocationPublisherParams) {
+  const publishLocation = useCallback(async () => {
+    // Compute geohash for efficient regional queries (N+1 optimization)
+    const geohash = geohashForLocation([location.latitude, location.longitude], 9);
+    const geohashPrefix = geohash.substring(0, 4); // ~20km cells
+
+    const driverLocation: DriverLocation = {
+      driverId,
+      location: { latitude, longitude, address },
+      geohash,
+      geohashPrefix,
+      isOnline: true,
+      timestamp: new Date(),
+      ...(activeOrderId && { orderId: activeOrderId }),
+    };
+
+    await updateDriverLocation(driverId, driverLocation);
+  }, [driverId, location, activeOrderId]);
+
   useEffect(() => {
     if (!driverId || !isOnline || !location) return;
 
-    // Publish immediately
-    updateDriverLocation(driverId, location, true, activeOrderId);
+    publishLocation(); // Immediately
+    const interval = setInterval(publishLocation, 10000); // Every 10s
 
-    // Then every 10 seconds
-    const interval = setInterval(() => {
-      updateDriverLocation(driverId, location, true, activeOrderId);
-    }, 10000);
-
-    return () => {
-      clearInterval(interval);
-      // Mark offline when unmounting
-      updateDriverLocation(driverId, location, false, null);
-    };
+    return () => clearInterval(interval);
   }, [driverId, isOnline, location?.latitude, location?.longitude]);
+}
+```
+
+#### Radius Filtering
+Drivers can filter orders by distance preference to avoid far-away requests.
+
+```
+Settings → Radius Filter toggle → Choose distance →
+10km / 25km / 50km / 75km / 100km / All →
+Only orders within radius appear in list
+```
+
+**Key Files:**
+- `src/hooks/driver/useDriverStatus.ts` - Radius preference state
+- `src/screens/driver/DriverHomeScreen.tsx` - Filter integration
+
+**User Preferences (stored in Firestore):**
+```typescript
+interface User {
+  // ... other fields
+  preferredRadius?: number;     // Default: 50km
+  radiusFilterEnabled?: boolean; // Default: false (show all)
 }
 ```
 
@@ -607,6 +645,8 @@ interface DriverLocation {
     longitude: number;
     address: string;
   };
+  geohash: string;        // 9-char precision (~4.77m) for N+1 optimization
+  geohashPrefix: string;  // 4-char prefix (~20km cells) for regional grouping
   isOnline: boolean;
   timestamp: Timestamp;
   orderId?: string; // If driver has active order
@@ -624,9 +664,74 @@ interface DriverLock {
 }
 ```
 
+#### 6. `nearbyDriversCache` (N+1 Optimization)
+```typescript
+interface RegionalDriverCache {
+  regionId: string;           // 4-char geohash prefix (e.g., "u8gh")
+  drivers: DriverSummary[];   // Compact driver array
+  driverCount: number;
+  updatedAt: Timestamp;
+}
+
+interface DriverSummary {
+  id: string;
+  lat: number;
+  lng: number;
+  heading?: number;
+  ts: number;  // Unix timestamp in seconds
+}
+```
+
+**Updated by:** `updateRegionalCaches` Cloud Function (every 60 seconds)
+
 ---
 
-## Firebase Cloud Functions
+## Firebase Cloud Functions (v2)
+
+### Migration to v2
+
+The project is **fully migrated to Firebase Functions v2** using the modular syntax:
+
+```typescript
+// v2 imports (current)
+import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
+import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
+
+// All functions specify region explicitly
+export const myFunction = onCall({ region: 'europe-west3' }, async (request) => {...});
+```
+
+### All Exported Functions (16+)
+
+| Function | Type | File | Purpose |
+|----------|------|------|---------|
+| **Order Triggers** ||||
+| `onOrderCreate` | `onDocumentCreated` | `ordersOnCreate.ts` | Notify drivers of new orders |
+| **Notifications** ||||
+| `onBidCreateNotification` | `onDocumentCreated` | `notifications.ts` | Push when bid arrives |
+| `onBidAcceptedNotification` | `onDocumentUpdated` | `notifications.ts` | Push when bid accepted |
+| `sendTestNotification` | `onCall` | `notifications.ts` | Test push notifications |
+| **Payments** ||||
+| `createPaymentIntent` | `onCall` | `payments.ts` | Create Stripe Payment Intent |
+| `processPayment` | `onCall` | `payments.ts` | Process successful payment |
+| `handleStripeWebhook` | `onRequest` | `payments.ts` | Stripe webhook handler |
+| `createPaymentLink` | `onCall` | `payments.ts` | Simple payment link |
+| **Custom Payments** ||||
+| `createPaymentLinkHTTP` | `onRequest` | `customPayments.ts` | HTTP payment link endpoint |
+| `createPaymentLinkTest` | `onRequest` | `customPayments.ts` | Testing endpoint |
+| `handlePaymentLinkWebhook` | `onRequest` | `customPayments.ts` | Payment link webhook |
+| `verifyPaymentLink` | `onCall` | `customPayments.ts` | Deep link verification |
+| **Driver Locks** ||||
+| `cleanupExpiredDriverLocks` | `onSchedule` | `cleanupDriverLocks.ts` | Every 2 min cleanup |
+| `manualCleanupDriverLocks` | `onSchedule` | `cleanupDriverLocks.ts` | Manual trigger |
+| `getDriverLockStats` | `onCall` | `cleanupDriverLocks.ts` | Lock monitoring |
+| **Regional Caches (N+1 Fix)** ||||
+| `updateRegionalCaches` | `onSchedule` | `regionCacheUpdater.ts` | Every 1 min cache update |
+| `manualRefreshRegionalCaches` | `onRequest` | `regionCacheUpdater.ts` | Manual refresh |
+| `getRegionalCacheStats` | `onCall` | `regionCacheUpdater.ts` | Cache monitoring |
+| **Migrations** ||||
+| `backfillDriverGeohash` | one-time | `migrations/backfillGeohash.ts` | Add geohash to existing data |
 
 ### Payment Functions (`functions/src/payments.ts`)
 
@@ -848,6 +953,140 @@ Location services use circuit breakers for transient failure handling.
 
 ---
 
+## N+1 Query Optimization (Regional Caching)
+
+### The Problem
+
+When displaying nearby drivers on the client map, the naive approach reads ALL online driver documents:
+
+```
+❌ Before: Client subscribes to driverLocations where isOnline=true
+   → 10,000+ document reads per client
+   → At scale: 1000 clients × 10,000 reads = 10M reads/minute
+   → Cost: ~$3M/month at scale
+```
+
+### The Solution: Regional Caching with Geohashing
+
+Drivers are grouped into ~20km regional cells using geohash prefixes. A Cloud Function aggregates online drivers into cache documents that clients subscribe to.
+
+```
+✅ After: Client subscribes to nearbyDriversCache/{regionId} (4-8 docs)
+   → 4-8 document reads per client
+   → At scale: 1000 clients × 8 reads = 8,000 reads/minute
+   → Cost: ~$200/month at scale (99.9% reduction)
+```
+
+### Architecture
+
+```
+Driver goes online
+    ↓
+useDriverLocationPublisher publishes to driverLocations/{id}
+    ↓ (includes geohash + geohashPrefix)
+Cloud Function updateRegionalCaches runs every 60s
+    ↓
+Groups drivers by 4-char geohash prefix (~20km cells)
+    ↓
+Writes to nearbyDriversCache/{regionId}
+    ↓
+Client's useNearbyDriversOptimized subscribes to 4-8 regional caches
+    ↓
+Filters by exact distance, displays on map
+```
+
+### Key Components
+
+**1. Geohash Fields (DriverLocation)**
+```typescript
+interface DriverLocation {
+  driverId: string;
+  location: { latitude, longitude, address };
+  geohash: string;        // 9-char precision (~4.77m accuracy)
+  geohashPrefix: string;  // 4-char prefix (~20km cells)
+  isOnline: boolean;
+  timestamp: Date;
+}
+```
+
+**2. Regional Cache Document**
+```typescript
+interface RegionalDriverCache {
+  regionId: string;           // 4-char geohash prefix (e.g., "u8gh")
+  drivers: DriverSummary[];   // Compact driver array
+  driverCount: number;
+  updatedAt: Date;
+}
+
+interface DriverSummary {
+  id: string;
+  lat: number;
+  lng: number;
+  heading?: number;
+  ts: number;  // Unix timestamp (compact)
+}
+```
+
+**3. Cloud Function (`regionCacheUpdater.ts`)**
+```typescript
+export const updateRegionalCaches = onSchedule({
+  schedule: 'every 1 minutes',
+  timeZone: 'Europe/Sofia',
+  region: 'europe-west3',
+}, async () => {
+  // 1. Query all online drivers (single read)
+  // 2. Group by 4-char geohash prefix
+  // 3. Write compact summaries to nearbyDriversCache/{regionId}
+  // 4. Clear stale regions with no drivers
+});
+```
+
+**4. Client Hook (`useNearbyDriversOptimized.ts`)**
+```typescript
+export function useNearbyDriversOptimized({
+  clientLocation,
+  radiusKm = 50,
+  enabled = true
+}) {
+  // Calculate which regions cover the search radius
+  const regionIds = useMemo(() => {
+    const bounds = geohashQueryBounds(center, radiusMeters);
+    return bounds.map(b => b[0].substring(0, 4)); // 4-char prefixes
+  }, [clientLocation, radiusKm]);
+
+  // Subscribe to each regional cache (4-8 documents)
+  useEffect(() => {
+    regionIds.forEach(regionId => {
+      onSnapshot(doc(db, 'nearbyDriversCache', regionId), ...);
+    });
+  }, [regionIds]);
+
+  // FALLBACK: If cache is empty, query driverLocations directly
+  // (handles newly online drivers not yet in cache)
+}
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `functions/src/regionCacheUpdater.ts` | Cloud Function that aggregates drivers |
+| `src/hooks/client/useNearbyDriversOptimized.ts` | Client hook with regional caching |
+| `src/hooks/driver/useDriverLocationPublisher.ts` | Publishes location with geohash |
+| `functions/src/migrations/backfillGeohash.ts` | One-time data migration |
+
+### Fallback Mechanism
+
+The regional cache updates every 60 seconds. If a driver just went online, they might not be in the cache yet. The hook includes a fallback:
+
+1. Subscribe to regional caches
+2. If cache returns 0 drivers after loading, query `driverLocations` directly
+3. Once cache populates, it takes over (more efficient)
+
+This ensures immediate visibility of new drivers while maintaining cost efficiency.
+
+---
+
 ## Map Component (NativeMap)
 
 The `NativeMap` component handles all map rendering with multiple marker types:
@@ -940,6 +1179,120 @@ const markerStyles = {
 ---
 
 ## Session History
+
+### 2026-02-08 - Documentation Update & Feature Review
+
+**Major documentation update** to bring `claude_context.md` in sync with current codebase.
+
+#### Features Documented
+
+| Feature | Description |
+|---------|-------------|
+| **Firebase Functions v2 Migration** | Full migration from v1 to v2 modular syntax (firebase-functions v7.0.5) |
+| **N+1 Query Optimization** | Regional caching with geohashing for nearby drivers (99% cost reduction) |
+| **Driver Radius Filtering** | Drivers can filter orders by distance (10km-100km or all) |
+| **Geohash Location Publishing** | Driver locations include geohash for efficient regional queries |
+
+#### New Collections Documented
+
+- `nearbyDriversCache` - Regional driver aggregation for N+1 optimization
+
+#### New Cloud Functions Documented
+
+- `updateRegionalCaches` - Scheduled function (every 1 min) for N+1 optimization
+- `manualRefreshRegionalCaches` - HTTP endpoint for testing
+- `getRegionalCacheStats` - Monitoring function
+- `backfillDriverGeohash` - One-time migration
+
+#### New Files Documented
+
+- `functions/src/regionCacheUpdater.ts`
+- `functions/src/migrations/backfillGeohash.ts`
+- `src/hooks/client/useNearbyDriversOptimized.ts`
+- `functions/src/cleanupDriverLocks.ts`
+- `functions/src/customPayments.ts`
+
+---
+
+### 2026-02-01 - Deep Link Payment Verification (Security Fix)
+
+**Critical security fix** for payment flow - prevents payment bypass via crafted deep links.
+
+#### Problem
+
+The deep link handler (`roadsideassistance://payment-success?orderId=XXX&amount=YYY`) was trusted without Stripe API verification. A malicious user could craft a fake deep link to confirm orders without actually paying.
+
+**Vulnerable code (before):**
+```typescript
+// useClientPayments.ts - NO VERIFICATION!
+confirmBid(activeOrder.id, reservedBidId);  // Called directly on deep link
+```
+
+#### Solution: Hybrid Verification
+
+Implemented a **hybrid approach** with belt-and-suspenders security:
+
+1. **Deep link** calls backend to verify payment via Stripe API
+2. **Webhook** also confirms (backup, already implemented)
+3. **Shared idempotency** via `webhookEvents` collection prevents double-processing
+
+#### Implementation
+
+**New Cloud Function** (`functions/src/customPayments.ts`):
+```typescript
+export const verifyPaymentLink = functions.region('europe-west3').https.onCall(
+  async (data: { orderId: string; sessionId: string }, context) => {
+    // 1. Require authentication
+    // 2. Retrieve Stripe Checkout Session
+    // 3. Verify session.metadata.orderId matches
+    // 4. Verify session.payment_status === 'paid'
+    // 5. Check webhookEvents for idempotency
+    // 6. Confirm bid using 2-phase commit
+    return { success: true, alreadyProcessed: boolean };
+  }
+);
+```
+
+**Updated Success URL** (includes session ID):
+```typescript
+const successUrl = `${baseUrl}payment-success?orderId=${orderId}&amount=${amount}&session_id={CHECKOUT_SESSION_ID}`;
+```
+
+**Secure Deep Link Handler** (`src/hooks/client/useClientPayments.ts`):
+```typescript
+if (url.includes('payment-success')) {
+  const sessionId = urlParams.get('session_id');
+  const orderId = urlParams.get('orderId');
+
+  if (sessionId && orderId) {
+    // NEW: Verify with Stripe API before confirming
+    const result = await verifyPaymentLinkWithStripe(orderId, sessionId);
+    if (result.success) {
+      // Show success - bid already confirmed by verifyPaymentLink
+    }
+  } else {
+    // No sessionId - show "processing" message, rely on webhook
+  }
+}
+```
+
+#### Files Modified
+
+| File | Changes |
+|------|---------|
+| `functions/src/customPayments.ts` | Added `verifyPaymentLink` function, updated success URL with `{CHECKOUT_SESSION_ID}` |
+| `functions/src/index.ts` | Export `verifyPaymentLink` |
+| `src/services/stripeService.ts` | Added `verifyPaymentLinkWithStripe` client function |
+| `src/hooks/client/useClientPayments.ts` | Replaced direct `confirmBid()` with verification call |
+
+#### Security Benefits
+
+1. **Payment verified via Stripe API** before order confirmation
+2. **Idempotent** - webhook and deep link verification share `webhookEvents` collection
+3. **Graceful fallback** - if verification fails, shows "processing" message and relies on webhook
+4. **User ownership verified** - only order owner can confirm via deep link
+
+---
 
 ### 2026-02-01 - Payment Confirmation Modal
 
@@ -1044,7 +1397,7 @@ const VALID_ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   searching: ['bidding', 'cancelled', 'expired'],
   bidding: ['payment_pending', 'cancelled', 'expired'],
   payment_pending: ['accepted', 'bidding', 'cancelled'],  // bidding = payment failed
-  accepted: ['in_progress', 'cancelled'],
+  accepted: ['in_progress', 'completed', 'cancelled'],    // completed allowed directly (no "start job" step)
   in_progress: ['completed', 'cancelled'],
   completed: [],   // Terminal state
   cancelled: [],   // Terminal state
