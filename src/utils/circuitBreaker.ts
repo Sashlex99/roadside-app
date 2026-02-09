@@ -1,6 +1,8 @@
 // Database Circuit Breaker Implementation for Phase 4
 // Provides fault tolerance and automatic recovery for database operations
 
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../config/firebase';
 import {
   CircuitBreakerState,
   CircuitBreakerConfig,
@@ -342,22 +344,22 @@ export class DatabaseCircuitBreaker {
 
   /**
    * Send alert for circuit breaker events
+   * Stores alerts in Firestore for dashboard visibility
    */
   private async sendAlert(alert: CircuitBreakerAlert): Promise<void> {
     console.log(`🚨 [CIRCUIT_BREAKER_ALERT] ${alert.type}:`, alert);
-    
-    // TODO: Integrate with external alerting systems
-    // This could send to Slack, email, monitoring systems, etc.
-    
+
     try {
-      // Example: Could store alerts in database for dashboard
-      // await storeAlert(alert);
-      
-      // Example: Could send to webhook
-      // await sendWebhookAlert(alert);
-      
+      // Store alerts in Firestore for dashboard visibility
+      await addDoc(collection(db, 'circuitBreakerAlerts'), {
+        ...alert,
+        createdAt: serverTimestamp()
+      });
+
+      console.log(`📝 [CIRCUIT_BREAKER] Alert stored in Firestore`);
     } catch (error) {
-      console.error('Failed to send circuit breaker alert:', error);
+      // Don't throw - alerting should not break the circuit breaker
+      console.error('Failed to store circuit breaker alert:', error);
     }
   }
 }
@@ -438,6 +440,13 @@ export const orderCreationCircuitBreaker = new DatabaseCircuitBreaker({
   failureThreshold: 4,
   recoveryTimeout: 45000, // 45 seconds
   operationTimeout: 8000   // 8 seconds
+});
+
+export const stripeCircuitBreaker = new DatabaseCircuitBreaker({
+  name: 'stripe-payments',
+  failureThreshold: 3,      // Open after 3 consecutive failures
+  recoveryTimeout: 30000,   // Try again after 30 seconds
+  operationTimeout: 15000   // Stripe calls timeout at 15 seconds
 });
 
 // Export types for external use

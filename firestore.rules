@@ -171,16 +171,28 @@ service cloud.firestore {
     match /driverLocks/{driverId} {
       // Allow authenticated users to read/write locks
       allow read, write: if request.auth != null;
-      
+
       // Allow automatic cleanup of expired locks
-      allow delete: if request.auth != null && 
+      allow delete: if request.auth != null &&
         resource.data.expiresAt < request.time;
-        
+
       // Prevent lock hijacking - only allow updates from same order
-      allow update: if request.auth != null && 
+      allow update: if request.auth != null &&
         resource.data.orderId == request.resource.data.orderId;
     }
-    
+
+    // 🚨 Circuit breaker alerts collection (for monitoring dashboard)
+    match /circuitBreakerAlerts/{alertId} {
+      // Only admins can read alerts (sensitive operational data)
+      allow read: if isAdmin();
+
+      // Authenticated clients can write alerts (when circuits trip)
+      allow create: if isAuthenticated();
+
+      // No updates or deletes from clients
+      allow update, delete: if isAdmin();
+    }
+
     // Default: deny unless explicitly allowed above
     match /{document=**} {
       allow read, write: if false;

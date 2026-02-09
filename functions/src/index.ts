@@ -24,3 +24,6 @@ export {
 
 // Migration functions (one-time use)
 export { backfillDriverGeohash } from './migrations/backfillGeohash';
+
+// Admin utility functions (diagnostics)
+export { checkDuplicateOrders, getDatabaseStats } from './adminUtils';

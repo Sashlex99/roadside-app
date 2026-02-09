@@ -1,6 +1,7 @@
-﻿import { httpsCallable, getFunctions } from 'firebase/functions';
+import { httpsCallable, getFunctions } from 'firebase/functions';
 import { auth } from '../config/firebase';
 import Constants from 'expo-constants';
+import { stripeCircuitBreaker } from '../utils/circuitBreaker';
 
 // Get functions instance with correct region (must match Firebase deployment region)
 const functions = getFunctions(auth.app, 'europe-west3');
@@ -55,60 +56,48 @@ export interface PaymentLinkResponse {
 
 /**
  * Creates a payment intent for order payment
+ * Protected by circuit breaker for resilience
  * @param data Payment intent data
  * @returns Payment intent response with client secret
  */
 export async function createPaymentIntent(data: PaymentIntentData): Promise<PaymentIntentResponse> {
-  try {
+  return stripeCircuitBreaker.execute(async () => {
     console.log('💳 Creating payment intent:', data);
-    
+
     const createPaymentIntentFunction = httpsCallable(functions, 'createPaymentIntent');
     const result = await createPaymentIntentFunction(data);
-    
+
     const response = result.data as PaymentIntentResponse;
-    
+
     console.log('✅ Payment intent created:', {
       paymentIntentId: response.paymentIntentId,
       amount: response.amount,
       platformFee: response.platformFee
     });
-    
+
     return response;
-  } catch (error) {
-    console.error('❌ Error creating payment intent:', error);
-    throw new Error(
-      error instanceof Error 
-        ? `Failed to create payment intent: ${error.message}`
-        : 'Failed to create payment intent'
-    );
-  }
+  });
 }
 
 /**
  * Processes a successful payment
+ * Protected by circuit breaker for resilience
  * @param data Payment processing data
  * @returns Payment processing response
  */
 export async function processPayment(data: PaymentProcessData): Promise<PaymentProcessResponse> {
-  try {
+  return stripeCircuitBreaker.execute(async () => {
     console.log('🔄 Processing payment:', data);
-    
+
     const processPaymentFunction = httpsCallable(functions, 'processPayment');
     const result = await processPaymentFunction(data);
-    
+
     const response = result.data as PaymentProcessResponse;
-    
+
     console.log('✅ Payment processed successfully:', response);
-    
+
     return response;
-  } catch (error) {
-    console.error('❌ Error processing payment:', error);
-    throw new Error(
-      error instanceof Error 
-        ? `Failed to process payment: ${error.message}`
-        : 'Failed to process payment'
-    );
-  }
+  });
 }
 
 /**
@@ -193,12 +182,12 @@ export function handlePaymentError(error: any): string {
 
 /**
  * Creates a payment link for platform fee payment (15%)
- * This is the new preferred approach for handling payments
+ * Protected by circuit breaker for resilience
  * @param data Payment link data
  * @returns Payment link response with URL
  */
 export async function createPaymentLink(data: PaymentLinkData): Promise<PaymentLinkResponse> {
-  try {
+  return stripeCircuitBreaker.execute(async () => {
     console.log('🔗 Creating payment link:', data);
 
     const createPaymentLinkFunction = httpsCallable(functions, 'createPaymentLink');
@@ -212,14 +201,7 @@ export async function createPaymentLink(data: PaymentLinkData): Promise<PaymentL
     });
 
     return response;
-  } catch (error) {
-    console.error('❌ Error creating payment link:', error);
-    throw new Error(
-      error instanceof Error
-        ? `Failed to create payment link: ${error.message}`
-        : 'Failed to create payment link'
-    );
-  }
+  });
 }
 
 /**
@@ -232,7 +214,7 @@ export interface PaymentVerificationResponse {
 
 /**
  * Verifies payment link completion via backend Stripe API call
- * Called from deep link handler to verify payment before confirming order
+ * Protected by circuit breaker for resilience
  * @param orderId - The order ID to verify
  * @param sessionId - The Stripe Checkout Session ID from deep link
  * @returns Verification result
@@ -241,7 +223,7 @@ export async function verifyPaymentLinkWithStripe(
   orderId: string,
   sessionId: string
 ): Promise<PaymentVerificationResponse> {
-  try {
+  return stripeCircuitBreaker.execute(async () => {
     console.log('🔍 Verifying payment link:', { orderId, sessionId });
 
     const verifyPaymentFunction = httpsCallable(functions, 'verifyPaymentLink');
@@ -252,12 +234,5 @@ export async function verifyPaymentLinkWithStripe(
     console.log('✅ Payment verification result:', response);
 
     return response;
-  } catch (error) {
-    console.error('❌ Error verifying payment:', error);
-    throw new Error(
-      error instanceof Error
-        ? `Payment verification failed: ${error.message}`
-        : 'Payment verification failed'
-    );
-  }
+  });
 } 
