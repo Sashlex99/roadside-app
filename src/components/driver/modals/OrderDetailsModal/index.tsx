@@ -31,26 +31,40 @@ export default function OrderDetailsModal({
 }: OrderDetailsModalProps) {
   const [showOfferModal, setShowOfferModal] = useState(false);
   const [offerPrice, setOfferPrice] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmitOffer = async () => {
+    // Prevent double-tap - if already submitting, ignore
+    if (isSubmitting) {
+      console.log('⚠️ [OrderDetailsModal] Already submitting, ignoring duplicate tap');
+      return;
+    }
+
     console.log('🔄 [OrderDetailsModal] handleSubmitOffer called - offerPrice:', offerPrice);
-    
+
     // ✅ FIX: Dismiss keyboard first to prevent double-tap issue
     Keyboard.dismiss();
-    
+
     if (!selectedOrder) {
       console.log('❌ [OrderDetailsModal] No selected order');
       return;
     }
 
-    console.log('🚀 [OrderDetailsModal] Calling onSubmitOffer...');
-    const success = await onSubmitOffer(selectedOrder, offerPrice);
-    console.log('✅ [OrderDetailsModal] onSubmitOffer result:', success);
-    
-    if (success) {
-      setOfferPrice('');
-      setShowOfferModal(false);
-      onClose();
+    // Set submitting state to prevent duplicate submissions
+    setIsSubmitting(true);
+
+    try {
+      console.log('🚀 [OrderDetailsModal] Calling onSubmitOffer...');
+      const success = await onSubmitOffer(selectedOrder, offerPrice);
+      console.log('✅ [OrderDetailsModal] onSubmitOffer result:', success);
+
+      if (success) {
+        setOfferPrice('');
+        setShowOfferModal(false);
+        onClose();
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -161,11 +175,17 @@ export default function OrderDetailsModal({
                 <Text style={styles.offerButtonText}>ОТКАЗ</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.offerButton, { backgroundColor: colors.primary }]}
+                style={[
+                  styles.offerButton,
+                  { backgroundColor: isSubmitting ? colors.textSecondary : colors.primary }
+                ]}
                 onPress={handleSubmitOffer}
                 activeOpacity={0.7}
+                disabled={isSubmitting}
               >
-                <Text style={styles.offerButtonText}>ИЗПРАТИ</Text>
+                <Text style={styles.offerButtonText}>
+                  {isSubmitting ? 'ИЗПРАЩАНЕ...' : 'ИЗПРАТИ'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

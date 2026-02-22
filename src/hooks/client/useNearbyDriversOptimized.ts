@@ -23,7 +23,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { doc, onSnapshot, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
-import { geohashQueryBounds } from 'geofire-common';
+import { geohashQueryBounds, geohashForLocation } from 'geofire-common';
 import { db } from '../../config/firebase';
 import { DriverLocation } from '../../types/firestore';
 import { LocationData } from '../../types/shared';
@@ -115,19 +115,48 @@ export function useNearbyDriversOptimized({
       // Extract unique 4-char prefixes that cover the search area
       const prefixes = new Set<string>();
 
+      // CRITICAL: Always include the client's own geohash prefix first
+      // This guarantees we find drivers very close to the client
+      const clientGeohash = geohashForLocation(center, 9);
+      const clientPrefix = clientGeohash.substring(0, 4);
+      prefixes.add(clientPrefix);
+
+      // Add prefixes from bounds
+      // Note: geohashQueryBounds returns ranges like [start, end] where end uses ~ as boundary
+      // We need to enumerate prefixes within each range, not just start/end
       bounds.forEach(([start, end]) => {
-        // Add prefixes for start and end of each bound
         if (start && start.length >= 4) {
-          prefixes.add(start.substring(0, 4));
-        }
-        if (end && end.length >= 4) {
-          prefixes.add(end.substring(0, 4));
+          const startPrefix = start.substring(0, 4);
+          prefixes.add(startPrefix);
+
+          // If end prefix is different from start, we need intermediate prefixes
+          if (end && end.length >= 4) {
+            const endPrefix = end.substring(0, 4);
+            // For geohashes, we can enumerate characters to find intermediate prefixes
+            // The last character increments: 0-9, then b-h, then j-n, then p-z (no a, i, l, o)
+            // For simplicity, we'll use a range-based approach
+            if (startPrefix !== endPrefix && startPrefix.substring(0, 3) === endPrefix.substring(0, 3)) {
+              // Same 3-char prefix, different 4th char - enumerate between them
+              const base32Chars = '0123456789bcdefghjkmnpqrstuvwxyz';
+              const startChar = startPrefix[3];
+              const endChar = endPrefix[3] === '~' ? 'z' : endPrefix[3];
+              const startIdx = base32Chars.indexOf(startChar);
+              const endIdx = base32Chars.indexOf(endChar);
+
+              if (startIdx !== -1 && endIdx !== -1) {
+                for (let i = startIdx; i <= endIdx && i < base32Chars.length; i++) {
+                  prefixes.add(startPrefix.substring(0, 3) + base32Chars[i]);
+                }
+              }
+            }
+          }
         }
       });
 
       const result = Array.from(prefixes);
 
       if (__DEV__) {
+        console.log(`📍 [NearbyDriversOptimized] Client geohash: ${clientGeohash} (prefix: ${clientPrefix})`);
         console.log(`📍 [NearbyDriversOptimized] Calculated ${result.length} regions for ${radiusKm}km radius:`, result);
       }
 
@@ -142,6 +171,12 @@ export function useNearbyDriversOptimized({
   useEffect(() => {
     // Reset if disabled or no location
     if (!enabled || !clientLocation || regionIds.length === 0) {
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log('📍 [NEARBY DRIVERS] Not searching - missing requirements');
+      console.log(`   enabled: ${enabled}`);
+      console.log(`   clientLocation: ${clientLocation ? `${clientLocation.latitude.toFixed(4)}, ${clientLocation.longitude.toFixed(4)}` : 'NULL'}`);
+      console.log(`   regionIds: ${regionIds.length}`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       setNearbyDrivers([]);
       setIsLoading(false);
       setError(null);
@@ -152,9 +187,12 @@ export function useNearbyDriversOptimized({
     setIsLoading(isFirstLoadRef.current);
     setError(null);
 
-    if (__DEV__) {
-      console.log(`📍 [NearbyDriversOptimized] Subscribing to ${regionIds.length} regional caches`);
-    }
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('📍 [NEARBY DRIVERS] Subscribing to regional caches');
+    console.log(`   Client Location: ${clientLocation.latitude.toFixed(4)}, ${clientLocation.longitude.toFixed(4)}`);
+    console.log(`   Search Radius: ${radiusKm}km`);
+    console.log(`   Regions to check: ${regionIds.join(', ')}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     const unsubscribes: (() => void)[] = [];
     regionDriversRef.current = new Map();
@@ -200,9 +238,18 @@ export function useNearbyDriversOptimized({
           setUsingFallback(false);
         }
 
-        if (__DEV__) {
-          console.log(`📍 [NearbyDriversOptimized] ${allDrivers.length} from cache → ${filtered.length} within ${radiusKm}km`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📍 [NEARBY DRIVERS] Update received');
+        console.log(`   Total from cache: ${allDrivers.length}`);
+        console.log(`   Within ${radiusKm}km: ${filtered.length}`);
+        if (filtered.length > 0) {
+          filtered.forEach((d, i) => {
+            console.log(`   Driver ${i + 1}: ${d.id} at (${d.lat.toFixed(4)}, ${d.lng.toFixed(4)})`);
+          });
+        } else {
+          console.log('   ⚠️ No drivers found in range!');
         }
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       } catch (err) {
         console.error('❌ [NearbyDriversOptimized] Error updating drivers:', err);
         setError(err instanceof Error ? err.message : 'Failed to update drivers');
@@ -252,6 +299,11 @@ export function useNearbyDriversOptimized({
       setUsingFallback(false);
     };
   }, [regionIds.join(','), enabled, clientLocation?.latitude, clientLocation?.longitude, radiusKm]);
+
+  // Reset fallback flag when location changes significantly (allows retry)
+  useEffect(() => {
+    fallbackAttemptedRef.current = false;
+  }, [clientLocation?.latitude?.toFixed(2), clientLocation?.longitude?.toFixed(2)]);
 
   // Fallback: If cache returns 0 drivers after loading, query driverLocations directly
   useEffect(() => {
@@ -323,9 +375,18 @@ export function useNearbyDriversOptimized({
           }
         });
 
-        if (__DEV__) {
-          console.log(`📍 [NearbyDriversOptimized] Fallback found ${filteredDrivers.length} drivers (from ${snapshot.size} online)`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📍 [NEARBY DRIVERS] FALLBACK query results');
+        console.log(`   Total online drivers in DB: ${snapshot.size}`);
+        console.log(`   Within ${radiusKm}km: ${filteredDrivers.length}`);
+        if (filteredDrivers.length > 0) {
+          filteredDrivers.forEach((d, i) => {
+            console.log(`   Driver ${i + 1}: ${d.driverId} at (${d.location.latitude.toFixed(4)}, ${d.location.longitude.toFixed(4)})`);
+          });
+        } else {
+          console.log('   ⚠️ No drivers found in range (check if locations match)!');
         }
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
         if (filteredDrivers.length > 0) {
           setNearbyDrivers(filteredDrivers);
@@ -344,6 +405,30 @@ export function useNearbyDriversOptimized({
 
     fetchDirectDrivers();
   }, [enabled, clientLocation, isLoading, nearbyDrivers.length, radiusKm, regionIds.length]);
+
+  // Periodic retry if no drivers found (every 30 seconds)
+  // This handles cases where cache is initially empty or drivers went offline
+  useEffect(() => {
+    // Don't retry if we have drivers, not enabled, or no location
+    if (nearbyDrivers.length > 0 || !enabled || !clientLocation) {
+      return;
+    }
+
+    if (__DEV__) {
+      console.log('📍 [NearbyDriversOptimized] Starting periodic retry (no drivers found)');
+    }
+
+    const retryInterval = setInterval(() => {
+      if (__DEV__) {
+        console.log('📍 [NearbyDriversOptimized] Retry interval - allowing fallback');
+      }
+      fallbackAttemptedRef.current = false; // Allow fallback to run again
+    }, 30000); // Every 30 seconds
+
+    return () => {
+      clearInterval(retryInterval);
+    };
+  }, [nearbyDrivers.length, enabled, clientLocation]);
 
   return {
     nearbyDrivers,

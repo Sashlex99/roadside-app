@@ -35,8 +35,11 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
 export const updateDriverLocation = async (driverId: string, location: DriverLocation): Promise<void> => {
   try {
     const locationRef = doc(db, COLLECTIONS.DRIVER_LOCATIONS, driverId);
+    // Use server timestamp for consistency across devices and time zones
+    // This ensures accurate staleness detection and cache invalidation
     await setDoc(locationRef, {
       ...location,
+      timestamp: serverTimestamp(), // Server time for accurate freshness
       updatedAt: serverTimestamp()
     }, { merge: true });
     

@@ -20,6 +20,11 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { geohashForLocation } from 'geofire-common';
 
+// Initialize admin if not already initialized
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
 // Compact driver summary for cache (minimizes document size)
 interface DriverSummary {
   id: string;
@@ -46,6 +51,9 @@ interface RegionalCache {
  */
 export const updateRegionalCaches = onSchedule(
   {
+    // Note: Cloud Scheduler minimum is 1 minute. Online/offline detection
+    // is now instant via Firestore triggers (onDriverStatusChange).
+    // This cache update handles position changes for moving drivers.
     schedule: 'every 1 minutes',
     timeZone: 'Europe/Sofia',
     region: 'europe-west3',
@@ -96,12 +104,13 @@ export const updateRegionalCaches = onSchedule(
           regions.set(prefix, []);
         }
 
-        // Create compact driver summary
+        // Create compact driver summary (preserve driver's original timestamp)
+        const driverTimestamp = data.timestamp?.toDate?.() || data.updatedAt?.toDate?.() || new Date();
         const summary: DriverSummary = {
           id: doc.id,
           lat: data.location.latitude,
           lng: data.location.longitude,
-          ts: Math.floor(Date.now() / 1000) // Unix seconds
+          ts: Math.floor(driverTimestamp.getTime() / 1000) // Driver's actual timestamp in Unix seconds
         };
 
         // Only include heading if available (saves space)
@@ -204,11 +213,13 @@ export const manualRefreshRegionalCaches = onRequest(
           regions.set(prefix, []);
         }
 
+        // Preserve driver's original timestamp
+        const driverTimestamp = data.timestamp?.toDate?.() || data.updatedAt?.toDate?.() || new Date();
         const summary: DriverSummary = {
           id: doc.id,
           lat: data.location.latitude,
           lng: data.location.longitude,
-          ts: Math.floor(Date.now() / 1000)
+          ts: Math.floor(driverTimestamp.getTime() / 1000)
         };
         // Only include heading if available (Firestore doesn't allow undefined)
         if (data.heading !== undefined && data.heading !== null) {

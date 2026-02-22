@@ -22,8 +22,22 @@ export {
   getRegionalCacheStats
 } from './regionCacheUpdater';
 
+// Driver status change triggers (instant online/offline detection)
+export {
+  onDriverStatusChange,
+  onDriverLocationCreated
+} from './driverOfflineTrigger';
+
 // Migration functions (one-time use)
 export { backfillDriverGeohash } from './migrations/backfillGeohash';
 
 // Admin utility functions (diagnostics)
 export { checkDuplicateOrders, getDatabaseStats } from './adminUtils';
+
+// Bid operations (server-side atomic transactions)
+export {
+  reserveBid,
+  confirmBid,
+  cancelBidReservation,
+  restoreDriverBids
+} from './bidOperations';

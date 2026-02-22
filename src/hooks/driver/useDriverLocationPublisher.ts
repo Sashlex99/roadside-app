@@ -69,9 +69,13 @@ export function useDriverLocationPublisher({
       setLastPublished(new Date());
       setPublishError(null);
 
-      if (__DEV__) {
-        console.log(`📍 [LocationPublisher] Published: ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`);
-      }
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log('📍 [DRIVER LOCATION] Published to Firestore');
+      console.log(`   Driver ID: ${driverId}`);
+      console.log(`   Location: ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`);
+      console.log(`   Geohash: ${geohash} (prefix: ${geohashPrefix})`);
+      console.log(`   Time: ${new Date().toISOString()}`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[LocationPublisher] Failed to publish:', errorMessage);
