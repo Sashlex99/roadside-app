@@ -69,4 +69,15 @@ export {
   forceUnlockDriver,
   cleanupExpiredDriverLocks,
   getLockStatistics
-} from './driverLocks'; 
+} from './driverLocks';
+
+// Bid Operations via Cloud Functions (server-side)
+export {
+  reserveBidViaCloudFunction,
+  confirmBidViaCloudFunction,
+  cancelBidReservationViaCloudFunction,
+  restoreDriverBidsViaCloudFunction,
+  isDriverLockError,
+  isBidNotPendingError,
+  isOrderNotValidError
+} from './bidOperationsService'; 

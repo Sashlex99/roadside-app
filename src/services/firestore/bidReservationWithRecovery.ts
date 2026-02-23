@@ -1,11 +1,21 @@
 // Enhanced Bid Reservation with Phase 4 Database Failure Recovery
 // Integrates circuit breaker, compensation actions, and timeout protection
+//
+// ✅ ENHANCED: Uses cancellable timeouts with proper rollback handling
+// When operations timeout, any writes that complete after timeout are rolled back
 
-import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { doc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { circuitBreakers, executeWithCircuitBreaker } from '../../utils/circuitBreakerInstances';
 import { createCompensationContext } from '../../utils/compensationActions';
-import { withTimeout, isTimeoutError, isLockAcquisitionError } from '../../utils/timeoutUtils';
+import {
+  withTimeout,
+  withCancellableTimeout,
+  withFirestoreTimeout,
+  isTimeoutError,
+  isLockAcquisitionError,
+  OperationState
+} from '../../utils/timeoutUtils';
 import { lockDriver, unlockDriver } from './driverLocks';
 
 /**
@@ -26,40 +36,71 @@ export const reserveBidWithRecovery = async (orderId: string, bidId: string): Pr
   
   try {
     // Step 1: Reserve bid with circuit breaker protection
+    // ✅ ENHANCED: Uses cancellable timeout with rollback
     const bidData = await executeWithCircuitBreaker('bid-reservation', async () => {
-      return await withTimeout(
-        runTransaction(db, async (transaction) => {
-          // Get bid data
-          const bidRef = doc(db, 'bids', bidId);
-          const bidSnap = await transaction.get(bidRef);
-          
-          if (!bidSnap.exists()) {
-            throw new Error(`Bid ${bidId} not found`);
-          }
-          
-          const bid = bidSnap.data();
-          
-          if (bid.status !== 'pending') {
-            throw new Error(`Bid ${bidId} is not pending (status: ${bid.status})`);
-          }
-          
-          if (bid.orderId !== orderId) {
-            throw new Error(`Bid ${bidId} does not belong to order ${orderId}`);
-          }
-          
-          // Reserve the bid
-          transaction.update(bidRef, {
-            status: 'reserved',
-            reservedAt: serverTimestamp(),
-            reservationExpiry: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+      return await withCancellableTimeout(
+        async (token: OperationState) => {
+          return await runTransaction(db, async (transaction) => {
+            // Check cancellation before proceeding
+            if (token.isCancelled) {
+              throw new Error('Operation cancelled before transaction start');
+            }
+
+            // Get bid data
+            const bidRef = doc(db, 'bids', bidId);
+            const bidSnap = await transaction.get(bidRef);
+
+            if (!bidSnap.exists()) {
+              throw new Error(`Bid ${bidId} not found`);
+            }
+
+            const bid = bidSnap.data();
+
+            if (bid.status !== 'pending') {
+              throw new Error(`Bid ${bidId} is not pending (status: ${bid.status})`);
+            }
+
+            if (bid.orderId !== orderId) {
+              throw new Error(`Bid ${bidId} does not belong to order ${orderId}`);
+            }
+
+            // Check cancellation again before writing
+            if (token.isCancelled) {
+              throw new Error('Operation cancelled before write');
+            }
+
+            // Reserve the bid
+            transaction.update(bidRef, {
+              status: 'reserved',
+              reservedAt: serverTimestamp(),
+              reservationExpiry: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+            });
+
+            console.log(`✅ Bid ${bidId} reserved in transaction`);
+            return bid;
           });
-          
-          console.log(`✅ Bid ${bidId} reserved in transaction`);
-          return bid;
-        }),
-        15000, // 15 second timeout for reservation
-        'Bid reservation transaction timeout',
-        'bid-reservation-transaction'
+        },
+        {
+          timeoutMs: 15000, // 15 second timeout for reservation
+          operationName: 'bid-reservation-transaction',
+          // ✅ ROLLBACK: If transaction completes after timeout, revert bid status
+          onRollback: async (result, token) => {
+            console.log(`🔄 Rolling back bid reservation (completed after timeout)`);
+            try {
+              const bidRef = doc(db, 'bids', bidId);
+              await updateDoc(bidRef, {
+                status: 'pending',
+                reservedAt: null,
+                reservationExpiry: null,
+                rollbackReason: 'Timeout rollback',
+                rollbackAt: serverTimestamp()
+              });
+              console.log(`✅ Bid ${bidId} rolled back to pending`);
+            } catch (rollbackError) {
+              console.error(`❌ Failed to rollback bid ${bidId}:`, rollbackError);
+            }
+          }
+        }
       );
     });
     
@@ -72,16 +113,33 @@ export const reserveBidWithRecovery = async (orderId: string, bidId: string): Pr
     console.log(`📦 Bid reserved: ${bidId} for driver ${driverId}`);
 
     // Step 2: Lock driver with circuit breaker protection
+    // ✅ ENHANCED: Uses cancellable timeout with rollback
     if (!driverId) {
       throw new Error('Driver ID is required for locking');
     }
-    
+
     await executeWithCircuitBreaker('driver-locks', async () => {
-      return await withTimeout(
-        lockDriver(driverId!, orderId, 10, bidId), // 10 minute lock
-        10000, // 10 second timeout
-        'Driver lock acquisition timeout',
-        'driver-lock-acquisition'
+      return await withCancellableTimeout(
+        async (token: OperationState) => {
+          if (token.isCancelled) {
+            throw new Error('Lock operation cancelled before start');
+          }
+          return await lockDriver(driverId!, orderId, 10, bidId); // 10 minute lock
+        },
+        {
+          timeoutMs: 10000, // 10 second timeout
+          operationName: 'driver-lock-acquisition',
+          // ✅ ROLLBACK: If lock acquired after timeout, release it
+          onRollback: async (result, token) => {
+            console.log(`🔄 Rolling back driver lock (acquired after timeout)`);
+            try {
+              await unlockDriver(driverId!, orderId);
+              console.log(`✅ Driver ${driverId} lock rolled back`);
+            } catch (rollbackError) {
+              console.error(`❌ Failed to rollback driver lock:`, rollbackError);
+            }
+          }
+        }
       );
     });
     
@@ -96,38 +154,68 @@ export const reserveBidWithRecovery = async (orderId: string, bidId: string): Pr
     console.log(`🔄 Driver conflicts will be resolved by existing system for bid ${bidId}`);
 
     // Step 3: Final validation with circuit breaker protection
+    // ✅ ENHANCED: Uses cancellable timeout with rollback
     await executeWithCircuitBreaker('database-queries', async () => {
-      return await withTimeout(
-        runTransaction(db, async (transaction) => {
-          // Verify order is still in correct state
-          const orderRef = doc(db, 'orders', orderId);
-          const orderSnap = await transaction.get(orderRef);
-          
-          if (!orderSnap.exists()) {
-            throw new Error(`Order ${orderId} not found during validation`);
+      return await withCancellableTimeout(
+        async (token: OperationState) => {
+          return await runTransaction(db, async (transaction) => {
+            if (token.isCancelled) {
+              throw new Error('Validation cancelled before start');
+            }
+
+            // Verify order is still in correct state
+            const orderRef = doc(db, 'orders', orderId);
+            const orderSnap = await transaction.get(orderRef);
+
+            if (!orderSnap.exists()) {
+              throw new Error(`Order ${orderId} not found during validation`);
+            }
+
+            const orderData = orderSnap.data();
+
+            if (orderData.status !== 'pending' && orderData.status !== 'payment_pending') {
+              throw new Error(`Order ${orderId} is no longer in valid state: ${orderData.status}`);
+            }
+
+            if (token.isCancelled) {
+              throw new Error('Validation cancelled before update');
+            }
+
+            // Update order to payment_pending if it was pending
+            if (orderData.status === 'pending') {
+              transaction.update(orderRef, {
+                status: 'payment_pending',
+                reservedBidId: bidId,
+                reservedDriverId: driverId,
+                reservationTimestamp: serverTimestamp()
+              });
+
+              console.log(`📋 Order ${orderId} moved to payment_pending`);
+            }
+          });
+        },
+        {
+          timeoutMs: 8000, // 8 second timeout
+          operationName: 'validation-transaction',
+          // ✅ ROLLBACK: If order updated after timeout, revert
+          onRollback: async (result, token) => {
+            console.log(`🔄 Rolling back order status update (completed after timeout)`);
+            try {
+              const orderRef = doc(db, 'orders', orderId);
+              await updateDoc(orderRef, {
+                status: 'pending',
+                reservedBidId: null,
+                reservedDriverId: null,
+                reservationTimestamp: null,
+                rollbackReason: 'Timeout rollback',
+                rollbackAt: serverTimestamp()
+              });
+              console.log(`✅ Order ${orderId} rolled back to pending`);
+            } catch (rollbackError) {
+              console.error(`❌ Failed to rollback order ${orderId}:`, rollbackError);
+            }
           }
-          
-          const orderData = orderSnap.data();
-          
-          if (orderData.status !== 'pending' && orderData.status !== 'payment_pending') {
-            throw new Error(`Order ${orderId} is no longer in valid state: ${orderData.status}`);
-          }
-          
-          // Update order to payment_pending if it was pending
-          if (orderData.status === 'pending') {
-            transaction.update(orderRef, {
-              status: 'payment_pending',
-              reservedBidId: bidId,
-              reservedDriverId: driverId,
-              reservationTimestamp: serverTimestamp()
-            });
-            
-            console.log(`📋 Order ${orderId} moved to payment_pending`);
-          }
-        }),
-        8000, // 8 second timeout
-        'Final validation timeout',
-        'validation-transaction'
+        }
       );
     });
 

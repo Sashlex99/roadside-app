@@ -1,5 +1,31 @@
 // Timeout Utilities for Phase 4 - Database Failure Recovery
 // Provides robust timeout handling for database operations
+//
+// ✅ ENHANCED: Addresses the "timeout doesn't cancel operations" issue
+// JavaScript can't truly cancel Firestore operations, but this module:
+// 1. Tracks operation state (cancelled/active)
+// 2. Ignores results from timed-out operations
+// 3. Provides rollback capabilities for operations that complete after timeout
+
+/**
+ * Operation state for tracking cancellation
+ */
+export interface OperationState {
+  isCancelled: boolean;
+  isCompleted: boolean;
+  startTime: number;
+  operationId: string;
+}
+
+/**
+ * Creates a cancellation token for tracking operation state
+ */
+export const createCancellationToken = (operationId?: string): OperationState => ({
+  isCancelled: false,
+  isCompleted: false,
+  startTime: Date.now(),
+  operationId: operationId || `op_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+});
 
 /**
  * Custom timeout error class with metadata
@@ -113,7 +139,7 @@ export const withTimeout = async <T>(
   operationName?: string
 ): Promise<T> => {
   const timeoutPromise = createTimeoutPromise<T>(timeoutMs, errorMessage, operationName);
-  
+
   try {
     const result = await Promise.race([operation, timeoutPromise]);
     return result;
@@ -124,6 +150,159 @@ export const withTimeout = async <T>(
     }
     throw error;
   }
+};
+
+/**
+ * ✅ ENHANCED: Cancellable operation wrapper that properly handles timeouts
+ *
+ * Unlike simple Promise.race, this:
+ * 1. Tracks operation state
+ * 2. Ignores results from cancelled operations
+ * 3. Calls optional rollback if operation completes after timeout
+ * 4. Prevents acting on stale data
+ *
+ * @param operationFn - Function that receives cancellation token and returns a promise
+ * @param options - Configuration options
+ * @returns Promise with result or timeout error
+ */
+export const withCancellableTimeout = async <T>(
+  operationFn: (token: OperationState) => Promise<T>,
+  options: {
+    timeoutMs: number;
+    operationName: string;
+    onRollback?: (result: T, token: OperationState) => Promise<void>;
+    onTimeout?: (token: OperationState) => void;
+  }
+): Promise<T> => {
+  const { timeoutMs, operationName, onRollback, onTimeout } = options;
+  const token = createCancellationToken(operationName);
+
+  let timeoutId: NodeJS.Timeout;
+  let operationResult: T | undefined;
+  let operationError: Error | undefined;
+
+  // Create timeout promise
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      token.isCancelled = true;
+      onTimeout?.(token);
+
+      console.warn(`⏱️ [${operationName}] Operation timed out after ${timeoutMs}ms (id: ${token.operationId})`);
+      console.warn(`⏱️ [${operationName}] NOTE: Underlying operation continues but results will be ignored`);
+
+      reject(new TimeoutError(`${operationName} timed out after ${timeoutMs}ms`, {
+        timeoutMs,
+        operation: operationName,
+        metadata: {
+          operationId: token.operationId,
+          cancelled: true
+        }
+      }));
+    }, timeoutMs);
+  });
+
+  // Wrap the operation to track completion
+  const wrappedOperation = (async () => {
+    try {
+      const result = await operationFn(token);
+      operationResult = result;
+      token.isCompleted = true;
+
+      // If operation completed AFTER timeout (token was cancelled)
+      if (token.isCancelled) {
+        console.warn(`⚠️ [${operationName}] Operation completed AFTER timeout (id: ${token.operationId})`);
+        console.warn(`⚠️ [${operationName}] Result will be ignored, calling rollback if provided`);
+
+        // Call rollback to undo the operation
+        if (onRollback) {
+          try {
+            await onRollback(result, token);
+            console.log(`✅ [${operationName}] Rollback completed successfully`);
+          } catch (rollbackError) {
+            console.error(`❌ [${operationName}] Rollback failed:`, rollbackError);
+          }
+        }
+
+        // Still throw since we already rejected with timeout
+        throw new Error('Operation completed after cancellation');
+      }
+
+      return result;
+    } catch (error) {
+      operationError = error as Error;
+      throw error;
+    }
+  })();
+
+  try {
+    const result = await Promise.race([wrappedOperation, timeoutPromise]);
+    clearTimeout(timeoutId!);
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutId!);
+
+    // If this is a timeout error, the operation might still complete
+    // We've already set up handling for that in wrappedOperation
+    throw error;
+  }
+};
+
+/**
+ * ✅ ENHANCED: Creates a guard function to check if operation should continue
+ * Use this inside long-running operations to check cancellation state
+ */
+export const createCancellationGuard = (token: OperationState) => {
+  return (checkpoint: string): void => {
+    if (token.isCancelled) {
+      console.log(`🛑 [${token.operationId}] Operation cancelled at checkpoint: ${checkpoint}`);
+      throw new Error(`Operation cancelled at: ${checkpoint}`);
+    }
+  };
+};
+
+/**
+ * ✅ ENHANCED: Wrapper for Firestore operations with proper cancellation handling
+ *
+ * Example usage:
+ * ```typescript
+ * const result = await withFirestoreTimeout(
+ *   async (token, checkCancelled) => {
+ *     checkCancelled('before-query');
+ *     const doc = await getDoc(ref);
+ *     checkCancelled('after-query');
+ *     return doc.data();
+ *   },
+ *   {
+ *     timeoutMs: 5000,
+ *     operationName: 'get-user-doc',
+ *     onRollback: async (result) => {
+ *       // Undo any writes that happened
+ *     }
+ *   }
+ * );
+ * ```
+ */
+export const withFirestoreTimeout = async <T>(
+  operationFn: (token: OperationState, checkCancelled: (checkpoint: string) => void) => Promise<T>,
+  options: {
+    timeoutMs: number;
+    operationName: string;
+    onRollback?: (result: T, token: OperationState) => Promise<void>;
+  }
+): Promise<T> => {
+  return withCancellableTimeout(
+    async (token) => {
+      const checkCancelled = createCancellationGuard(token);
+      return operationFn(token, checkCancelled);
+    },
+    {
+      ...options,
+      onTimeout: (token) => {
+        console.log(`🔥 [Firestore] Operation ${options.operationName} timed out, but Firestore call continues...`);
+        console.log(`🔥 [Firestore] Any results will be ignored. Consider rollback for write operations.`);
+      }
+    }
+  );
 };
 
 /**

@@ -74,6 +74,23 @@ export default function LoginScreen({ navigation }: Props) {
           setLoading(true);
           const user = await login(savedEmail, savedPassword);
           console.log('[LoginScreen] Auto-login successful:', user.uid);
+
+          // ✅ FIX: Check driver verification status on auto-login too
+          if (user.userType === 'driver') {
+            const driverStatus = user.verificationStatus || 'approved';
+            console.log('[LoginScreen] Auto-login driver verification check:', {
+              verificationStatus: user.verificationStatus,
+              effectiveStatus: driverStatus
+            });
+
+            if (driverStatus !== 'approved') {
+              console.log('[LoginScreen] Auto-login: Driver not approved, logging out');
+              await logout();
+              setLoading(false);
+              return;
+            }
+          }
+
           // Navigation handled by AuthContext
         } catch (autoLoginError) {
           console.log('[LoginScreen] Auto-login failed, user needs to login manually:', autoLoginError);
@@ -136,7 +153,15 @@ export default function LoginScreen({ navigation }: Props) {
 
       // Check driver status AFTER successful login
       // For non-approved drivers, we need to logout immediately
-      if (user.userType === 'driver' && user.verificationStatus !== 'approved') {
+      // ✅ FIX: Treat missing/undefined verificationStatus as 'approved' for backwards compatibility
+      const driverStatus = user.verificationStatus || 'approved';
+      console.log('[LoginScreen] Driver verification check:', {
+        userType: user.userType,
+        verificationStatus: user.verificationStatus,
+        effectiveStatus: driverStatus
+      });
+
+      if (user.userType === 'driver' && driverStatus !== 'approved') {
         // Logout the user since they shouldn't have access
         await logout();
 

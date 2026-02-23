@@ -1048,9 +1048,38 @@ export const getActiveOrders = async (): Promise<Order[]> => {
 
 /**
  * Get accepted orders for a specific driver
+ * ✅ ENHANCED: Added comprehensive debug logging for permission troubleshooting
  */
 export const getAcceptedOrdersForDriver = async (driverId: string): Promise<Order[]> => {
+  console.log('🔍 [DEBUG] getAcceptedOrdersForDriver called:', { driverId });
+
   try {
+    // DEBUG: Check auth state before query
+    const currentUser = auth.currentUser;
+    console.log('🔍 [DEBUG] Auth state check:', {
+      isAuthenticated: !!currentUser,
+      currentUserId: currentUser?.uid || 'NOT_AUTHENTICATED',
+      requestedDriverId: driverId,
+      isSameUser: currentUser?.uid === driverId,
+    });
+
+    if (!currentUser) {
+      console.error('❌ [DEBUG] No authenticated user! Cannot query accepted orders.');
+      console.error('❌ [DEBUG] This is likely the cause of "Missing or insufficient permissions" error.');
+      return [];
+    }
+
+    // DEBUG: Log the query parameters
+    console.log('🔍 [DEBUG] Building query with:', {
+      collection: COLLECTIONS.ORDERS,
+      filters: {
+        acceptedDriverId: driverId,
+        status: 'accepted',
+      },
+      orderBy: 'createdAt DESC',
+      limit: 10,
+    });
+
     const ordersRef = collection(db, COLLECTIONS.ORDERS);
     const q = query(
       ordersRef,
@@ -1059,10 +1088,13 @@ export const getAcceptedOrdersForDriver = async (driverId: string): Promise<Orde
       orderBy('createdAt', 'desc'),
       limit(10)
     );
-    
+
+    console.log('🔍 [DEBUG] Executing Firestore query...');
     const querySnapshot = await getDocs(q);
+    console.log('✅ [DEBUG] Query successful! Found', querySnapshot.size, 'orders');
+
     const orders: Order[] = [];
-    
+
     querySnapshot.forEach((doc: QueryDocumentSnapshot<DocumentData>) => {
       const data = doc.data();
       orders.push({
@@ -1073,10 +1105,27 @@ export const getAcceptedOrdersForDriver = async (driverId: string): Promise<Orde
         expiresAt: data.expiresAt?.toDate(),
       } as Order);
     });
-    
+
+    console.log('✅ [DEBUG] Returning', orders.length, 'accepted orders for driver:', driverId);
     return orders;
-  } catch (error) {
-    console.error("Error getting accepted orders for driver:", error);
+  } catch (error: any) {
+    console.error('❌ [DEBUG] Error getting accepted orders for driver:', {
+      driverId,
+      errorCode: error?.code,
+      errorMessage: error?.message,
+      fullError: error,
+    });
+
+    // Provide specific debugging hints based on error type
+    if (error?.code === 'permission-denied' || error?.message?.includes('permission')) {
+      console.error('❌ [DEBUG] PERMISSION ERROR - Possible causes:');
+      console.error('   1. Missing composite index (acceptedDriverId + status + createdAt)');
+      console.error('   2. User not authenticated (check auth.currentUser)');
+      console.error('   3. Firestore rules not allowing read');
+      console.error('   4. User token expired');
+      console.error('🔧 [DEBUG] Fix: Deploy firestore.indexes.json with: firebase deploy --only firestore:indexes');
+    }
+
     return [];
   }
 };

@@ -1,5 +1,6 @@
 const { getDefaultConfig } = require('@expo/metro-config');
 const path = require('path');
+const exclusionList = require('metro-config/src/defaults/exclusionList');
 
 /**
  * Custom Metro configuration to work around Firebase Auth "Component auth has not been registered yet" error
@@ -18,6 +19,31 @@ if (!config.resolver.sourceExts.includes('cjs')) {
 
 // Disable experimental package exports resolution (causes Firebase component registration failure)
 config.resolver.unstable_enablePackageExports = false;
+
+// Exclude admin-panel (Next.js project) from Metro bundler
+const adminPanelPath = path.resolve(__dirname, 'admin-panel');
+config.resolver.blockList = exclusionList([
+  new RegExp(`${adminPanelPath.replace(/\\/g, '\\\\')}.*`),
+  /admin-panel\/.*/,
+]);
+
+// Exclude admin-panel from file watcher
+config.watcher = {
+  ...config.watcher,
+  watchman: {
+    ...config.watcher?.watchman,
+    ignore: ['admin-panel'],
+  },
+  healthCheck: {
+    ...config.watcher?.healthCheck,
+  },
+};
+
+// Ignore admin-panel in resolver
+config.resolver.blacklistRE = exclusionList([
+  new RegExp(`${adminPanelPath.replace(/\\/g, '\\\\')}.*`),
+  /admin-panel\/.*/,
+]);
 
 // Web platform resolver for native modules (like Stripe)
 config.resolver.platforms = ['web', 'ios', 'android', 'native'];

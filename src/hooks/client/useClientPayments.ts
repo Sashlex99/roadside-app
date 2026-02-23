@@ -1,6 +1,11 @@
 ﻿import { useState, useEffect, useRef } from 'react';
 import { Linking, AppState } from 'react-native';
-import { reserveBid, confirmBid, cancelBidReservation, updateOrderStatus } from '../../services/firestore';
+// ✅ Use Cloud Functions for bid operations (server-side atomic transactions)
+import {
+  reserveBidViaCloudFunction,
+  cancelBidReservationViaCloudFunction,
+  isDriverLockError
+} from '../../services/firestore';
 import { createPaymentLinkWithToken } from '../../services/customStripeService';
 import { verifyPaymentLinkWithStripe } from '../../services/stripeService';
 import { ensureDriverNotification } from '../../utils/driverNotifications';
@@ -272,15 +277,15 @@ export function useClientPayments({
       if (url.includes('payment-cancelled') || url.includes('payment-failed')) {
         console.log('❌ Payment cancelled/failed deep link received:', url);
         
-        // Cancel bid reservation BEFORE resetting states
+        // Cancel bid reservation BEFORE resetting states via Cloud Function
         const reservedBidId = activeOrder?.reservedBidId;
         if (reservedBidId) {
-          console.log('🔄 Cancelling bid reservation for:', { orderId: activeOrder.id, bidId: reservedBidId });
-          cancelBidReservation(activeOrder.id, reservedBidId).catch(error => {
+          console.log('🔄 Cancelling bid reservation via Cloud Function:', { orderId: activeOrder.id, bidId: reservedBidId });
+          cancelBidReservationViaCloudFunction(activeOrder.id, reservedBidId).catch(error => {
             console.error('Error cancelling bid reservation:', error);
           });
         }
-        
+
         // Close payment modal and reset states
         setPaymentModal({ visible: false, amount: 0, paymentUrl: '', driverName: '', totalAmount: 0 });
         setPaymentInProgress(false);
@@ -387,14 +392,14 @@ export function useClientPayments({
       if (isPaymentModalActiveRef.current && currentPaymentModalVisible) {
         console.log('⏰ Payment modal timeout reached - auto-closing');
 
-        // Cancel bid reservation if payment didn't complete
+        // Cancel bid reservation if payment didn't complete via Cloud Function
         // ✅ FIX: Use currentActiveOrder from ref, not stale activeOrder
         if (currentActiveOrder?.reservedBidId) {
-          console.log('🔄 Cancelling bid reservation due to timeout:', {
+          console.log('🔄 Cancelling bid reservation due to timeout via Cloud Function:', {
             orderId: currentActiveOrder.id,
             bidId: currentActiveOrder.reservedBidId
           });
-          cancelBidReservation(currentActiveOrder.id, currentActiveOrder.reservedBidId).catch(error => {
+          cancelBidReservationViaCloudFunction(currentActiveOrder.id, currentActiveOrder.reservedBidId).catch(error => {
             console.error('Error cancelling bid reservation on timeout:', error);
           });
         }
@@ -467,14 +472,14 @@ export function useClientPayments({
             }
             isPaymentModalActiveRef.current = false;
 
-            // Cancel bid reservation BEFORE resetting states
+            // Cancel bid reservation BEFORE resetting states via Cloud Function
             const reservedBidId = currentActiveOrderNow?.reservedBidId;
             if (reservedBidId) {
-              console.log('🔄 Cancelling bid reservation for:', {
+              console.log('🔄 Cancelling bid reservation via Cloud Function:', {
                 orderId: currentActiveOrderNow.id,
                 bidId: reservedBidId
               });
-              cancelBidReservation(currentActiveOrderNow.id, reservedBidId).catch(error => {
+              cancelBidReservationViaCloudFunction(currentActiveOrderNow.id, reservedBidId).catch(error => {
                 console.error('Error cancelling bid reservation:', error);
               });
             }
@@ -548,10 +553,14 @@ export function useClientPayments({
     });
 
     try {
-      // 1. Reserve bid в Firestore (Phase 1) - locks the driver
-      console.log('📝 Step 1: Reserving bid in Firestore...');
-      await reserveBid(activeOrder.id, bidId);
-      console.log('✅ Step 1: Bid reserved successfully');
+      // 1. Reserve bid via Cloud Function (server-side atomic transaction)
+      console.log('📝 Step 1: Reserving bid via Cloud Function...');
+      const reservationResult = await reserveBidViaCloudFunction(activeOrder.id, bidId);
+      console.log('✅ Step 1: Bid reserved successfully:', {
+        reservationId: reservationResult.reservationId,
+        driverId: reservationResult.driverId,
+        expiresAt: reservationResult.expiresAt
+      });
 
       // 2. Close bids modal before showing payment sheet
       setShowBidsModal(false);
@@ -593,8 +602,8 @@ export function useClientPayments({
       } else if (paymentResult.cancelled) {
         console.log('ℹ️ Payment cancelled by user');
 
-        // Cancel bid reservation
-        await cancelBidReservation(activeOrder.id, bidId);
+        // Cancel bid reservation via Cloud Function
+        await cancelBidReservationViaCloudFunction(activeOrder.id, bidId);
 
         // Show cancellation message and reopen bids
         setCustomModal({
@@ -614,8 +623,8 @@ export function useClientPayments({
       } else {
         console.error('❌ Payment failed:', paymentResult.errorMessage);
 
-        // Cancel bid reservation on payment failure
-        await cancelBidReservation(activeOrder.id, bidId);
+        // Cancel bid reservation on payment failure via Cloud Function
+        await cancelBidReservationViaCloudFunction(activeOrder.id, bidId);
 
         setCustomModal({
           visible: true,
@@ -638,29 +647,33 @@ export function useClientPayments({
     } catch (error: any) {
       console.error('❌ Error in confirmAcceptBid:', error);
 
-      // Cancel bid reservation on error
+      // Cancel bid reservation on error via Cloud Function
       try {
-        await cancelBidReservation(activeOrder.id, bidId);
+        await cancelBidReservationViaCloudFunction(activeOrder.id, bidId);
       } catch (cancelError) {
         console.error('Error cancelling bid reservation:', cancelError);
       }
 
-      // More specific error messages
+      // More specific error messages (using Cloud Function error helpers)
       let errorMessage = 'Не успяхме да обработим офертата';
-      if (error?.code === 'unauthenticated') {
+      if (error?.code === 'unauthenticated' || error?.message?.includes('must be logged in')) {
         errorMessage = 'Моля, влезте отново в профила си';
-      } else if (error?.code === 'permission-denied') {
+      } else if (error?.code === 'permission-denied' || error?.message?.includes('permission')) {
         errorMessage = 'Нямате права за тази операция';
-      } else if (error?.message?.includes('Driver is already reserved for another order')) {
+      } else if (isDriverLockError(error)) {
         errorMessage = 'Този шофьор вече е зает с друга поръчка. Моля, изберете друг шофьор.';
-      } else if (error?.message?.includes('Bid is not active')) {
+      } else if (error?.message?.includes('Bid is not pending') || error?.message?.includes('not pending')) {
         errorMessage = 'Тази оферта вече не е активна. Моля, изберете друга оферта.';
       } else if (error?.message?.includes('Another bid is already reserved')) {
         errorMessage = 'Вече има резервирана оферта за тази поръчка. Моля, опитайте отново.';
+      } else if (error?.message?.includes('Order is not in valid state') || error?.message?.includes('not in valid state')) {
+        errorMessage = 'Поръчката не е в правилно състояние. Моля, опитайте отново.';
       } else if (error?.message?.includes('payment')) {
         errorMessage = 'Проблем с плащането. Моля, опитайте отново';
-      } else if (error?.message?.includes('network')) {
+      } else if (error?.message?.includes('network') || error?.message?.includes('unavailable')) {
         errorMessage = 'Проблем с мрежата. Проверете интернет връзката';
+      } else if (error?.message?.includes('timed out') || error?.message?.includes('timeout')) {
+        errorMessage = 'Заявката отне твърде много време. Моля, опитайте отново.';
       }
 
       setCustomModal({
@@ -740,14 +753,14 @@ export function useClientPayments({
     }
     isPaymentModalActiveRef.current = false;
     
-    // Cancel bid reservation
+    // Cancel bid reservation via Cloud Function
     if (activeOrder?.reservedBidId) {
-      console.log('🔄 Cancelling bid reservation for:', { orderId: activeOrder.id, bidId: activeOrder.reservedBidId });
-      cancelBidReservation(activeOrder.id, activeOrder.reservedBidId).catch(error => {
+      console.log('🔄 Cancelling bid reservation via Cloud Function:', { orderId: activeOrder.id, bidId: activeOrder.reservedBidId });
+      cancelBidReservationViaCloudFunction(activeOrder.id, activeOrder.reservedBidId).catch(error => {
         console.error('Error cancelling bid reservation:', error);
       });
     }
-    
+
     setPaymentModal({ visible: false, amount: 0, paymentUrl: '', driverName: '', totalAmount: 0 });
     setPaymentInProgress(false);
     setAcceptingBid(false);

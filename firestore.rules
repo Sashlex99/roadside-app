@@ -1,201 +1,121 @@
-// Firestore Security Rules for Roadside Assistance App
-// Phase 1: Database Security - OPTIMIZED VERSION
-
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Helper functions - OPTIMIZED to reduce get() calls
+
+    // Helper function to check if user is authenticated
     function isAuthenticated() {
       return request.auth != null;
     }
-    
-    function isOwner(userId) {
-      return request.auth.uid == userId;
-    }
-    
-    // ✅ OPTIMIZED: Use custom claims when available, fallback to document lookup
+
+    // Helper function to check if user is an admin
+    // Checks both admins collection AND users collection for role: "admin"
     function isAdmin() {
       return isAuthenticated() && (
-        (request.auth.token.role == 'admin') ||
-        (request.auth.token.role == null && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+             exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
       );
     }
-    
+
+    // Helper function to check if user is a driver
     function isDriver() {
-      return isAuthenticated() && (
-        (request.auth.token.userType == 'driver') ||
-        (request.auth.token.userType == null && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.userType == 'driver')
-      );
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/drivers/$(request.auth.uid));
     }
-    
-    function isClient() {
-      return isAuthenticated() && (
-        (request.auth.token.userType == 'client') ||
-        (request.auth.token.userType == null && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.userType == 'client')
-      );
+
+    // Helper function to check if user owns the document
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
     }
-    
-    // Users collection
+
+    // ============================================
+    // ADMIN COLLECTION - Admin users list
+    // ============================================
+    match /admins/{adminId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ============================================
+    // USERS COLLECTION - Client users
+    // ============================================
     match /users/{userId} {
-      // ✅ SIMPLIFIED: Allow authenticated users to read any user (needed for driver info in bids)
-      allow read: if isAuthenticated();
-      
-      // Users can create their own profile during registration
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      
-      // Users can update their own data, admins can update anyone
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated();
       allow update: if isOwner(userId) || isAdmin();
-      
-      // Only admins can delete users
       allow delete: if isAdmin();
     }
-    
-    // Orders collection - PRODUCTION RULES with proper ownership checks
-    match /orders/{orderId} {
-      // Allow reading orders:
-      // - Any authenticated user can read orders (needed for bid restoration, order checks)
-      // - Order data is not sensitive; payments and updates are protected separately
+
+    // ============================================
+    // DRIVERS COLLECTION
+    // ============================================
+    match /drivers/{driverId} {
       allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isOwner(driverId) || isAdmin();
+      allow delete: if isAdmin();
+    }
 
-      // Only clients can create orders (their own)
-      allow create: if isAuthenticated() &&
-        request.resource.data.clientId == request.auth.uid;
+    // ============================================
+    // DRIVER LOCATIONS - Real-time tracking
+    // ============================================
+    match /driverLocations/{driverId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(driverId) || isAdmin();
+    }
 
-      // Clients can update their own orders, accepted drivers can update order status
-      // Also allow anyone to mark truly expired orders as 'expired' (cleanup)
-      allow update: if isAuthenticated() && (
-        resource.data.clientId == request.auth.uid ||
-        resource.data.acceptedDriverId == request.auth.uid ||
-        resource.data.reservedDriverId == request.auth.uid ||
-        isAdmin() ||
-        // Allow marking expired orders as 'expired' (for client-side cleanup)
-        (request.resource.data.status == 'expired' &&
-         resource.data.expiresAt < request.time &&
-         resource.data.status in ['pending', 'searching', 'bidding'])
-      );
-
-      // Only admins can delete orders
+    // ============================================
+    // ORDERS COLLECTION
+    // ============================================
+    match /orders/{orderId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
       allow delete: if isAdmin();
 
-      // Bids subcollection (legacy - kept for backwards compatibility)
+      // Bids subcollection
       match /bids/{bidId} {
-        // Anyone authenticated can read bids for orders they have access to
         allow read: if isAuthenticated();
-
-        // Drivers can create bids
-        allow create: if isAuthenticated() && isDriver();
-
-        // Drivers can update their own bids, clients can update to accept
+        allow create: if isDriver();
         allow update: if isAuthenticated();
-
-        // Only admins can delete bids
         allow delete: if isAdmin();
       }
     }
 
-    // Top-level bids collection (new structure)
-    match /bids/{bidId} {
-      // Read: any authenticated user (needed for order flow)
-      allow read: if isAuthenticated();
+    // ============================================
+    // SYSTEM HEALTH - Monitoring data
+    // ============================================
+    match /systemHealth/{document=**} {
+      allow read: if isAdmin();
+      allow write: if false; // Only Cloud Functions can write
+    }
 
-      // Create: only drivers can create bids (as themselves)
-      allow create: if isAuthenticated() &&
-        request.resource.data.driverId == request.auth.uid;
-
-      // Update: driver can update their own bid, OR client can accept/reserve/reject
-      // (Client accepting a bid needs to update bid status)
-      allow update: if isAuthenticated();
-
-      // Delete: only admins
+    // ============================================
+    // SYSTEM ALERTS - Monitoring alerts
+    // ============================================
+    match /systemAlerts/{alertId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update: if isAdmin();
       allow delete: if isAdmin();
     }
-    
-    // Driver locations collection - PRODUCTION RULES
-    match /driverLocations/{driverId} {
-      // Anyone can read driver locations (needed for nearby drivers feature)
+
+    // ============================================
+    // REGIONAL CACHES - N+1 optimization
+    // ============================================
+    match /regionalCaches/{region} {
       allow read: if isAuthenticated();
-
-      // Only the driver themselves can write their location
-      allow create, update: if isAuthenticated() &&
-        request.auth.uid == driverId;
-
-      // Drivers can delete their own location, admins can delete any
-      allow delete: if isAuthenticated() && (
-        request.auth.uid == driverId ||
-        isAdmin()
-      );
+      allow write: if false; // Only Cloud Functions can write
     }
-    
-    // Notifications collection
-    match /notifications/{notificationId} {
-      // Users can read and manage their own notifications
-      allow read, write: if isAuthenticated();
-      
-      // Allow deletion of own notifications
+
+    // ============================================
+    // PUSH TOKENS - Notification tokens
+    // ============================================
+    match /pushTokens/{tokenId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
       allow delete: if isAuthenticated();
     }
-    
-    // Order analytics collection
-    match /orderAnalytics/{analyticsId} {
-      allow read, write: if isAuthenticated(); // Simplified for now
-    }
-
-    // Webhook events collection (for idempotency - server-side only)
-    match /webhookEvents/{eventId} {
-      // Only server (admin SDK) can write, users can't access
-      allow read, write: if false;
-    }
-
-    // Payment links collection (server-side created)
-    match /paymentLinks/{linkId} {
-      // Clients can read their own payment links
-      allow read: if isAuthenticated() &&
-        resource.data.clientId == request.auth.uid;
-
-      // Only server can write
-      allow write: if false;
-    }
-    
-    // 📍 Regional cache for nearby drivers (N+1 optimization)
-    // Read-only for clients, only Cloud Functions (Admin SDK) can write
-    match /nearbyDriversCache/{regionId} {
-      allow read: if isAuthenticated();
-      allow write: if false;  // Only Admin SDK (Cloud Functions)
-    }
-
-    // 🔒 NEW: Driver locks collection for atomic locking
-    match /driverLocks/{driverId} {
-      // Allow authenticated users to read/write locks
-      allow read, write: if request.auth != null;
-
-      // Allow automatic cleanup of expired locks
-      allow delete: if request.auth != null &&
-        resource.data.expiresAt < request.time;
-
-      // Prevent lock hijacking - only allow updates from same order
-      allow update: if request.auth != null &&
-        resource.data.orderId == request.resource.data.orderId;
-    }
-
-    // 🚨 Circuit breaker alerts collection (for monitoring dashboard)
-    match /circuitBreakerAlerts/{alertId} {
-      // Only admins can read alerts (sensitive operational data)
-      allow read: if isAdmin();
-
-      // Authenticated clients can write alerts (when circuits trip)
-      allow create: if isAuthenticated();
-
-      // No updates or deletes from clients
-      allow update, delete: if isAdmin();
-    }
-
-    // Default: deny unless explicitly allowed above
-    match /{document=**} {
-      allow read, write: if false;
-    }
   }
-} 
+}

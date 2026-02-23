@@ -74,12 +74,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     let lastAuthState = false; // Track last auth state to prevent false logouts
     
     logger.info('AUTH', 'Setting up Firebase auth listeners');
-    
+    console.log('🔥 [SDK] Setting up Firebase SDK auth state listeners...');
+
     (async () => {
       try {
         const { auth, db } = await import('../config/firebase');
+        console.log('✅ [SDK] Auth & Firestore SDK instances loaded');
 
-        // Listen for auth state changes
+        // Listen for auth state changes using SDK onAuthStateChanged
+        console.log('🔥 [SDK] Subscribing to onAuthStateChanged (SDK real-time listener)');
         unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
           if (!isMounted) return; // Prevent state updates after unmount
 
@@ -290,7 +293,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           }
         });
 
-        // Keep ID token in sync for REST clients
+        // Keep ID token in sync using SDK onIdTokenChanged
+        console.log('🔥 [SDK] Subscribing to onIdTokenChanged (SDK real-time listener)');
         unsubscribeToken = onIdTokenChanged(auth, async (fbUser) => {
           if (!isMounted) return; // Prevent state updates after unmount
 
@@ -377,16 +381,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       console.log('ðŸ” Starting login process for:', email);
       
       // 1) Sign-in via Firebase SDK so Firestore gets authenticated
+      console.log('🔥 [SDK] Loading Firebase SDK modules...');
       const { signInWithEmailAndPassword } = await import('firebase/auth');
+      console.log('✅ [SDK] Loaded: signInWithEmailAndPassword from firebase/auth');
       const { doc, getDoc } = await import('firebase/firestore');
+      console.log('✅ [SDK] Loaded: doc, getDoc from firebase/firestore');
       const { db, auth } = await import('../config/firebase');
+      console.log('✅ [SDK] Loaded: db (Firestore), auth (Auth) instances');
 
       console.log('ðŸ” Signing in with Firebase Auth...');
+      console.log('🔐 [SDK] Calling signInWithEmailAndPassword() - Firebase Auth SDK method');
       const fbUserCredential = await signInWithEmailAndPassword(auth, email, password);
       const fbUser = fbUserCredential.user;
+      console.log('✅ [SDK] Auth SDK returned UserCredential');
       console.log('âœ… Firebase Auth sign-in successful:', fbUser.uid);
 
-      // 2) Get ID token immediately for REST calls
+      // 2) Get ID token via SDK (not REST)
       console.log('ðŸ”‘ Getting ID token...');
       const idToken = await fbUser.getIdToken(/* forceRefresh */ true);
       console.log('âœ… ID token obtained');
@@ -433,10 +443,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     } catch (sdkError: any) {
       console.error('âŒ Firebase SDK login failed:', sdkError);
       
-      // SDK sign-in failed â†’ fallback to REST signIn (rare)
+      // SDK sign-in failed - falling back to REST API â†’ fallback to REST signIn (rare)
       console.warn('âš ï¸ Firebase SDK signIn failed, falling back to REST');
       try {
+        console.log('🌐 [REST] Attempting REST API authentication...');
         const authData = await signIn(email, password);
+        console.log('✅ [REST] REST API authentication successful');
 
         // Build minimal user object from REST response
         const userProfile: User = {

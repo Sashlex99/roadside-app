@@ -34,6 +34,16 @@ export { backfillDriverGeohash } from './migrations/backfillGeohash';
 // Admin utility functions (diagnostics)
 export { checkDuplicateOrders, getDatabaseStats } from './adminUtils';
 
+// Admin dashboard functions
+export {
+  adminGetStats,
+  adminGetOrders,
+  adminGetOrderDetails,
+  adminCancelOrder,
+  logSystemAlert,
+  resolveSystemAlert
+} from './adminDashboard';
+
 // Bid operations (server-side atomic transactions)
 export {
   reserveBid,

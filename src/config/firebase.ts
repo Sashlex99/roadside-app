@@ -1,38 +1,87 @@
-import { initializeApp, getApps } from 'firebase/app';
+import { initializeApp, getApps, getApp, SDK_VERSION } from 'firebase/app';
 import { getAuth, connectAuthEmulator } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 import { initializeFirestore, connectFirestoreEmulator, enableNetwork, disableNetwork } from 'firebase/firestore';
+import { getFunctions } from 'firebase/functions';
 import { firebaseConfig } from './environment';
 
+// ============================================================
+// 🔥 FIREBASE SDK INITIALIZATION & STATUS LOGGING
+// ============================================================
+
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('🔥 [SDK] Firebase SDK Loading...');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log(`📦 [SDK] Firebase JS SDK Version: ${SDK_VERSION}`);
+console.log('📦 [SDK] Mode: JavaScript SDK (NOT REST API)');
+console.log('📦 [SDK] Modules loaded: firebase/app, firebase/auth, firebase/firestore, firebase/storage');
+
 // Using secure environment-based configuration
-console.log('🔧 Firebase configuration loaded from environment variables');
+console.log('🔧 [SDK] Firebase configuration loaded from environment variables');
 
 // Prevent multiple Firebase app initialization
 let app;
-if (getApps().length === 0) {
+const existingApps = getApps();
+console.log(`🔧 [SDK] Existing Firebase apps: ${existingApps.length}`);
+
+if (existingApps.length === 0) {
+  console.log('🔧 [SDK] Initializing new Firebase app...');
   app = initializeApp(firebaseConfig);
+  console.log(`✅ [SDK] Firebase app initialized: ${app.name}`);
+  console.log(`✅ [SDK] Project ID: ${app.options.projectId}`);
 } else {
   app = getApps()[0];
+  console.log(`♻️ [SDK] Reusing existing Firebase app: ${app.name}`);
 }
 
 // Initialize Firebase services
+console.log('🔧 [SDK] Initializing Firebase Auth...');
 export const auth = getAuth(app);
+console.log(`✅ [SDK] Firebase Auth initialized - SDK Auth instance created`);
+console.log(`✅ [SDK] Auth config: { appName: "${auth.app.name}", tenantId: ${auth.tenantId || 'null'} }`);
+
+console.log('🔧 [SDK] Initializing Firebase Storage...');
 export const storage = getStorage(app);
+console.log(`✅ [SDK] Firebase Storage initialized - Bucket: ${storage.app.options.storageBucket}`);
+
+// Initialize Firebase Functions (for Cloud Functions calls)
+console.log('🔧 [SDK] Initializing Firebase Functions...');
+export const functions = getFunctions(app, 'europe-west3'); // Match Cloud Functions region
+console.log(`✅ [SDK] Firebase Functions initialized - Region: europe-west3`);
 
 // ✅ ENHANCED: React Native Firebase handles persistence automatically through AsyncStorage
 // No need to configure persistence manually in React Native environment
-console.log('🔐 React Native Firebase Auth persistence is handled automatically via AsyncStorage');
+console.log('🔐 [SDK] React Native Firebase Auth persistence is handled automatically via AsyncStorage');
 
 // ✅ ENHANCED: Optimized Firestore configuration for React Native
-export const db = initializeFirestore(app, {
+console.log('🔧 [SDK] Initializing Firestore SDK...');
+const firestoreConfig = {
   // Force HTTP long-polling instead of WebSocket/gRPC (fixes React Native issues)
   experimentalForceLongPolling: true,
   // Disable fetch streams to avoid RN/Expo fetch stream issues
   useFetchStreams: false,
-  
   // Increase cache size for better offline performance
   cacheSizeBytes: 40 * 1024 * 1024, // 40MB cache
-});
+};
+
+console.log('📋 [SDK] Firestore config:', JSON.stringify({
+  experimentalForceLongPolling: firestoreConfig.experimentalForceLongPolling,
+  useFetchStreams: firestoreConfig.useFetchStreams,
+  cacheSizeBytes: `${firestoreConfig.cacheSizeBytes / (1024 * 1024)}MB`,
+  connectionMode: 'HTTP Long-Polling (NOT WebSocket/gRPC)',
+  dataMode: 'SDK with real-time listeners (NOT REST API)',
+}));
+
+export const db = initializeFirestore(app, firestoreConfig);
+console.log(`✅ [SDK] Firestore SDK initialized successfully`);
+console.log(`✅ [SDK] Firestore type: ${db.type} | App: ${db.app.name}`);
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('🔥 [SDK] SUMMARY: Using Firebase JavaScript SDK');
+console.log('   • Auth: SDK (signInWithEmailAndPassword, onAuthStateChanged)');
+console.log('   • Firestore: SDK (onSnapshot, real-time listeners)');
+console.log('   • Storage: SDK (uploadBytes, getDownloadURL)');
+console.log('   • NOT using REST API for core operations');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
 // ✅ ENHANCED: Optimized auth state monitoring with proper cleanup tracking
 const monitorAuthState = () => {
@@ -235,28 +284,42 @@ export const cleanupFirebase = () => {
 
 // Run setup based on environment
 if (__DEV__) {
-  console.log('🔧 Development mode: Enhanced Firebase setup with monitoring...');
-  
+  console.log('🔧 [SDK] Development mode: Enhanced Firebase setup with monitoring...');
+
   // Initialize with monitoring
   initializeFirebaseWithMonitoring().then((cleanup: () => void) => {
     firebaseCleanupFunction = cleanup;
-    console.log('✅ Firebase monitoring initialized in development mode');
+    console.log('✅ [SDK] Firebase monitoring initialized in development mode');
+
+    // Log SDK status summary
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🔥 [SDK STATUS] Firebase SDK fully loaded and ready');
+    console.log(`   • SDK Version: ${SDK_VERSION}`);
+    console.log(`   • App Name: ${app.name}`);
+    console.log(`   • Auth Ready: ${auth ? 'YES' : 'NO'}`);
+    console.log(`   • Firestore Ready: ${db ? 'YES' : 'NO'}`);
+    console.log(`   • Storage Ready: ${storage ? 'YES' : 'NO'}`);
+    console.log(`   • Current User: ${auth.currentUser?.uid || 'None (not logged in yet)'}`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   });
-  
+
   // ✅ DISABLED: Aggressive networking setup causes crashes
   // setupFirebaseNetworking();
   // monitorConnection();
-  
+
   // ✅ Let Firebase SDK handle connections automatically
-  console.log('✅ Using Firebase SDK auto-connection management');
+  console.log('✅ [SDK] Using Firebase SDK auto-connection management (not REST)');
 } else {
   // Production: run enhanced setup
-  console.log('🔧 Production mode: Enhanced Firebase setup with monitoring...');
-  
+  console.log('🔧 [SDK] Production mode: Enhanced Firebase setup with monitoring...');
+
   // Initialize with monitoring
   initializeFirebaseWithMonitoring().then((cleanup: () => void) => {
     firebaseCleanupFunction = cleanup;
-    console.log('✅ Firebase monitoring initialized in production mode');
+    console.log('✅ [SDK] Firebase monitoring initialized in production mode');
+
+    // Log SDK status summary
+    console.log('🔥 [SDK STATUS] Firebase SDK fully loaded and ready');
   });
 }
 
