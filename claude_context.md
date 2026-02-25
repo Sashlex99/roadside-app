@@ -152,17 +152,20 @@ roadside-assistance-travel/
 │
 ├── functions/                         # Firebase Cloud Functions (v2)
 │   └── src/
-│       ├── index.ts                   # Function exports (16+ functions)
+│       ├── index.ts                   # Function exports (22+ functions)
 │       ├── payments.ts                # Payment processing (onCall, onRequest)
 │       ├── customPayments.ts          # Payment links & webhooks
 │       ├── notifications.ts           # Push notifications (onDocumentCreated)
 │       ├── ordersOnCreate.ts          # Order triggers
 │       ├── cleanupDriverLocks.ts      # Scheduled lock cleanup (onSchedule)
 │       ├── regionCacheUpdater.ts      # N+1 optimization caching (onSchedule)
+│       ├── adminDashboard.ts          # Admin panel APIs (onCall)
+│       ├── bidOperations.ts           # Server-side bid operations
+│       ├── driverOfflineTrigger.ts    # Driver status change detection
 │       └── migrations/
 │           └── backfillGeohash.ts     # One-time geohash migration
 │
-├── admin-panel/                       # Separate React admin app
+├── # admin-panel moved to C:\Projects\admin-panel (separate Next.js project)
 │
 ├── app.json                           # Expo configuration
 ├── eas.json                           # EAS Build configuration
@@ -702,7 +705,7 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 export const myFunction = onCall({ region: 'europe-west3' }, async (request) => {...});
 ```
 
-### All Exported Functions (16+)
+### All Exported Functions (22+)
 
 | Function | Type | File | Purpose |
 |----------|------|------|---------|
@@ -732,6 +735,13 @@ export const myFunction = onCall({ region: 'europe-west3' }, async (request) => 
 | `getRegionalCacheStats` | `onCall` | `regionCacheUpdater.ts` | Cache monitoring |
 | **Migrations** ||||
 | `backfillDriverGeohash` | one-time | `migrations/backfillGeohash.ts` | Add geohash to existing data |
+| **Admin Dashboard** ||||
+| `adminGetStats` | `onCall` | `adminDashboard.ts` | Dashboard statistics |
+| `adminGetOrders` | `onCall` | `adminDashboard.ts` | Paginated order list |
+| `adminGetOrderDetails` | `onCall` | `adminDashboard.ts` | Order with bids/client/driver |
+| `adminCancelOrder` | `onCall` | `adminDashboard.ts` | Admin cancel order |
+| `logSystemAlert` | `onCall` | `adminDashboard.ts` | Log system alerts |
+| `resolveSystemAlert` | `onCall` | `adminDashboard.ts` | Resolve alerts |
 
 ### Payment Functions (`functions/src/payments.ts`)
 
@@ -1179,6 +1189,167 @@ const markerStyles = {
 ---
 
 ## Session History
+
+### 2026-02-25 - Driver Visibility Optimization & Firestore Triggers
+
+**Fixed:** Drivers not appearing on client map until connected via order.
+
+#### Problem
+- Drivers weren't visible on the client map on fresh login
+- Only became visible after an order connected client and driver
+- Regional cache updated every 60 seconds (too slow for instant visibility)
+
+#### Solution: Instant Cache Updates via Firestore Triggers
+
+**Triggers deployed** (`functions/src/driverOfflineTrigger.ts`):
+- `onDriverStatusChange` - Updates cache when driver's `isOnline` changes
+- `onDriverLocationCreated` - Updates cache when new driver document is created
+
+**How it works:**
+```
+Driver goes online
+       ↓
+updateDriverLocationServer (Cloud Function)
+       ↓
+Writes to driverLocations/{driverId} with isOnline: true
+       ↓
+Firestore trigger fires instantly
+       ↓
+Updates nearbyDriversCache/{geohashPrefix}
+       ↓
+Client's cache subscription receives update
+       ↓
+Driver appears on map (1-2 seconds)
+```
+
+#### Scalability Fix: Geohash-Filtered Fallback
+
+**File:** `src/hooks/client/useNearbyDriversOptimized.ts`
+
+**Before:** Fallback queried ALL online drivers (not scalable with 200+ drivers)
+```typescript
+where('isOnline', '==', true)  // All 200 drivers!
+```
+
+**After:** Fallback only queries nearby regions
+```typescript
+where('isOnline', '==', true),
+where('geohashPrefix', 'in', regionIds.slice(0, 10))  // Only 10-20 nearby drivers
+```
+
+#### Files Modified
+| File | Changes |
+|------|---------|
+| `src/hooks/client/useNearbyDriversOptimized.ts` | Added geohash filter to fallback, changed to real-time subscription |
+
+#### Files Deployed (already existed, now deployed)
+| File | Triggers |
+|------|----------|
+| `functions/src/driverOfflineTrigger.ts` | `onDriverStatusChange`, `onDriverLocationCreated` |
+
+---
+
+### 2026-02-23 - Admin Dashboard Built & App Fixes
+
+**Major feature: Comprehensive Admin Dashboard** for full app monitoring.
+
+#### Admin Dashboard Created (Next.js)
+
+**Location:** `C:\Projects\admin-panel` (separate from main Expo project)
+
+| Feature | Files | Description |
+|---------|-------|-------------|
+| **Live Map** | `/app/map/page.tsx`, `/components/map/LiveMap.tsx` | Real-time Google Maps with driver/order markers |
+| **Orders Management** | `/app/orders/page.tsx`, `/components/orders/*` | Filterable order list with pagination |
+| **Order Details** | `/app/orders/[id]/page.tsx` | Full order info with bids, mini-map, timeline |
+| **System Health** | `/app/health/page.tsx` | Circuit breakers, alerts, metrics dashboard |
+| **Real-time Hooks** | `/hooks/useDriverLocations.ts`, `/hooks/useActiveOrders.ts`, etc. | Firebase real-time subscriptions |
+| **Firebase Auth** | `/app/login/page.tsx`, `/components/AdminLayout.tsx` | Proper Firebase Auth for admin access |
+
+**Admin Panel Navigation:**
+```
+Dashboard (/)
+├── Live Map (/map) - Real-time drivers & orders on Google Maps
+├── Orders (/orders) - Filterable order list with pagination
+│   └── Order Detail (/orders/[id]) - Full order info with bids
+├── System Health (/health) - Circuit breakers, alerts, metrics
+├── Drivers (/drivers) - Existing
+└── Clients (/clients) - Existing
+```
+
+#### Cloud Functions for Admin APIs
+
+**File:** `functions/src/adminDashboard.ts`
+
+| Function | Type | Purpose |
+|----------|------|---------|
+| `adminGetStats` | `onCall` | Dashboard statistics (drivers, orders, revenue) |
+| `adminGetOrders` | `onCall` | Paginated order list with filters |
+| `adminGetOrderDetails` | `onCall` | Order with bids, client/driver info |
+| `adminCancelOrder` | `onCall` | Admin cancel order action |
+| `logSystemAlert` | `onCall` | Log system alerts for monitoring |
+| `resolveSystemAlert` | `onCall` | Mark alerts as resolved |
+
+#### Firestore Rules Updated
+
+**File:** `firestore.rules`
+
+Added support for admin role in `users` collection (not just `admins` collection):
+
+```javascript
+function isAdmin() {
+  return isAuthenticated() && (
+    exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+    get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+  );
+}
+```
+
+#### Bug Fixes Applied
+
+| Issue | Fix |
+|-------|-----|
+| Duplicate bids when tapping fast | Added `isSubmitting` state to prevent double-tap |
+| "Bid is not pending (status: active)" error | Cloud Function now accepts both 'active' and 'pending' statuses |
+| Metro scanning admin-panel folder | Added exclusion list + moved admin-panel to separate directory |
+| Admin panel not authenticating | Fixed login to use Firebase Auth (not just localStorage) |
+
+#### Files Created/Modified
+
+**New Files:**
+- `C:\Projects\admin-panel/` - Entire admin panel (Next.js)
+- `functions/src/adminDashboard.ts` - Admin Cloud Functions
+- `firestore.rules` - Updated with admin role support
+- `.watchmanconfig` - Metro ignore config
+
+**Modified Files:**
+- `metro.config.js` - Added admin-panel exclusion
+- `functions/src/index.ts` - Export admin functions
+- `functions/src/bidOperations.ts` - Accept 'active' bid status
+
+#### Known Issues / TODO
+
+**Admin Panel (needs work):**
+- [ ] Fix various UI issues (user reported "a lot of things to fix")
+- [ ] Add proper error boundaries
+- [ ] Improve loading states
+- [ ] Add data export functionality
+- [ ] Add driver/client management pages
+
+**Production Readiness (from scalability analysis):**
+- [ ] Idempotency for duplicate request handling
+- [ ] Offline handling in mobile app
+- [ ] Retry logic for failed operations
+- [ ] Location update optimization (10s updates = 172.8M writes/day at scale)
+- [ ] Circuit breaker monitoring/alerting integration
+
+**Cost Optimization:**
+- Current location updates: Every 10 seconds
+- At 20k drivers: ~172.8M Firestore writes/day
+- Estimated cost at scale: ~$10k/month
+- Potential fix: Reduce update frequency or use batching
+
+---
 
 ### 2026-02-08 - Documentation Update & Feature Review
 

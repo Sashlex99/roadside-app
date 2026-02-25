@@ -22,7 +22,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { doc, onSnapshot, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where } from 'firebase/firestore';
 import { geohashQueryBounds, geohashForLocation } from 'geofire-common';
 import { db } from '../../config/firebase';
 import { DriverLocation } from '../../types/firestore';
@@ -98,7 +98,6 @@ export function useNearbyDriversOptimized({
   // Store drivers from each region
   const regionDriversRef = useRef(new Map<string, DriverSummary[]>());
   const isFirstLoadRef = useRef(true);
-  const fallbackAttemptedRef = useRef(false);
   const [usingFallback, setUsingFallback] = useState(false);
 
   // Calculate which regions to subscribe to based on client location
@@ -232,9 +231,8 @@ export function useNearbyDriversOptimized({
         setIsLoading(false);
         isFirstLoadRef.current = false;
 
-        // Reset fallback flag if cache now has drivers
+        // If cache has drivers, stop using fallback
         if (filtered.length > 0) {
-          fallbackAttemptedRef.current = false;
           setUsingFallback(false);
         }
 
@@ -295,140 +293,132 @@ export function useNearbyDriversOptimized({
       }
       unsubscribes.forEach(fn => fn());
       regionDriversRef.current.clear();
-      fallbackAttemptedRef.current = false;
-      setUsingFallback(false);
     };
   }, [regionIds.join(','), enabled, clientLocation?.latitude, clientLocation?.longitude, radiusKm]);
 
-  // Reset fallback flag when location changes significantly (allows retry)
-  useEffect(() => {
-    fallbackAttemptedRef.current = false;
-  }, [clientLocation?.latitude?.toFixed(2), clientLocation?.longitude?.toFixed(2)]);
-
-  // Fallback: If cache returns 0 drivers after loading, query driverLocations directly
+  // Fallback: If cache returns 0 drivers, subscribe to driverLocations directly (real-time)
+  // This is a SUBSCRIPTION (not one-time query) so we see drivers as soon as they publish
   useEffect(() => {
     // Only fallback if:
     // 1. Enabled and has location
     // 2. Not loading anymore
     // 3. Cache returned 0 drivers
-    // 4. Haven't attempted fallback yet (prevent infinite loops)
-    if (!enabled || !clientLocation || isLoading || nearbyDrivers.length > 0 || fallbackAttemptedRef.current) {
+    if (!enabled || !clientLocation || isLoading || nearbyDrivers.length > 0) {
       return;
     }
 
-    fallbackAttemptedRef.current = true;
+    // Limit to first 10 regions (Firestore 'in' operator limit)
+    const nearbyRegions = regionIds.slice(0, 10);
 
-    const fetchDirectDrivers = async () => {
-      try {
-        if (__DEV__) {
-          console.log('📍 [NearbyDriversOptimized] Cache empty, falling back to direct query');
-        }
-        setUsingFallback(true);
-
-        // Query online drivers directly from driverLocations
-        const twoMinutesAgo = Timestamp.fromDate(new Date(Date.now() - 2 * 60 * 1000));
-        const driversRef = collection(db, 'driverLocations');
-        const q = query(
-          driversRef,
-          where('isOnline', '==', true)
-        );
-
-        const snapshot = await getDocs(q);
-
-        // Filter by distance and timestamp client-side
-        const filteredDrivers: DriverLocation[] = [];
-
-        snapshot.forEach(doc => {
-          const data = doc.data();
-
-          // Check timestamp freshness
-          const timestamp = data.timestamp?.toDate?.() || data.timestamp;
-          if (!timestamp || timestamp < twoMinutesAgo.toDate()) {
-            return; // Skip stale locations
-          }
-
-          // Check location exists
-          if (!data.location?.latitude || !data.location?.longitude) {
-            return;
-          }
-
-          // Check distance
-          const distance = calculateDistance(
-            clientLocation.latitude,
-            clientLocation.longitude,
-            data.location.latitude,
-            data.location.longitude
-          );
-
-          if (distance <= radiusKm) {
-            filteredDrivers.push({
-              driverId: doc.id,
-              location: {
-                latitude: data.location.latitude,
-                longitude: data.location.longitude,
-                address: data.location.address || ''
-              },
-              heading: data.heading,
-              isOnline: true,
-              timestamp: timestamp
-            });
-          }
-        });
-
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('📍 [NEARBY DRIVERS] FALLBACK query results');
-        console.log(`   Total online drivers in DB: ${snapshot.size}`);
-        console.log(`   Within ${radiusKm}km: ${filteredDrivers.length}`);
-        if (filteredDrivers.length > 0) {
-          filteredDrivers.forEach((d, i) => {
-            console.log(`   Driver ${i + 1}: ${d.driverId} at (${d.location.latitude.toFixed(4)}, ${d.location.longitude.toFixed(4)})`);
-          });
-        } else {
-          console.log('   ⚠️ No drivers found in range (check if locations match)!');
-        }
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-        if (filteredDrivers.length > 0) {
-          setNearbyDrivers(filteredDrivers);
-          setStats({
-            regionCount: regionIds.length,
-            totalFromCache: 0,
-            afterDistanceFilter: filteredDrivers.length,
-            usingFallback: true
-          });
-        }
-      } catch (err) {
-        console.error('❌ [NearbyDriversOptimized] Fallback query failed:', err);
-        // Don't set error - cache might still work eventually
+    if (nearbyRegions.length === 0) {
+      if (__DEV__) {
+        console.log('📍 [NearbyDriversOptimized] No regions to query for fallback');
       }
-    };
-
-    fetchDirectDrivers();
-  }, [enabled, clientLocation, isLoading, nearbyDrivers.length, radiusKm, regionIds.length]);
-
-  // Periodic retry if no drivers found (every 30 seconds)
-  // This handles cases where cache is initially empty or drivers went offline
-  useEffect(() => {
-    // Don't retry if we have drivers, not enabled, or no location
-    if (nearbyDrivers.length > 0 || !enabled || !clientLocation) {
       return;
     }
 
     if (__DEV__) {
-      console.log('📍 [NearbyDriversOptimized] Starting periodic retry (no drivers found)');
+      console.log('📍 [NearbyDriversOptimized] Cache empty, starting GEOHASH-FILTERED fallback subscription');
+      console.log(`   Querying regions: ${nearbyRegions.join(', ')}`);
     }
+    setUsingFallback(true);
 
-    const retryInterval = setInterval(() => {
-      if (__DEV__) {
-        console.log('📍 [NearbyDriversOptimized] Retry interval - allowing fallback');
+    // Subscribe to online drivers in NEARBY REGIONS only (scalable with 200+ drivers!)
+    const driversRef = collection(db, 'driverLocations');
+    const q = query(
+      driversRef,
+      where('isOnline', '==', true),
+      where('geohashPrefix', 'in', nearbyRegions) // Only nearby regions, not ALL drivers
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        try {
+          const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+
+          // Filter by distance and timestamp client-side
+          const filteredDrivers: DriverLocation[] = [];
+
+          snapshot.forEach(doc => {
+            const data = doc.data();
+
+            // Check timestamp freshness
+            const timestamp = data.timestamp?.toDate?.() || data.timestamp;
+            if (!timestamp || timestamp < twoMinutesAgo) {
+              return; // Skip stale locations
+            }
+
+            // Check location exists
+            if (!data.location?.latitude || !data.location?.longitude) {
+              return;
+            }
+
+            // Check distance
+            const distance = calculateDistance(
+              clientLocation.latitude,
+              clientLocation.longitude,
+              data.location.latitude,
+              data.location.longitude
+            );
+
+            if (distance <= radiusKm) {
+              filteredDrivers.push({
+                driverId: doc.id,
+                location: {
+                  latitude: data.location.latitude,
+                  longitude: data.location.longitude,
+                  address: data.location.address || ''
+                },
+                heading: data.heading,
+                isOnline: true,
+                timestamp: timestamp
+              });
+            }
+          });
+
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('📍 [NEARBY DRIVERS] GEOHASH-FILTERED fallback update');
+          console.log(`   Online drivers in nearby regions: ${snapshot.size}`);
+          console.log(`   Within ${radiusKm}km: ${filteredDrivers.length}`);
+          if (filteredDrivers.length > 0) {
+            filteredDrivers.forEach((d, i) => {
+              console.log(`   Driver ${i + 1}: ${d.driverId} at (${d.location.latitude.toFixed(4)}, ${d.location.longitude.toFixed(4)})`);
+            });
+          } else {
+            console.log('   ⚠️ No drivers found in range yet');
+          }
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+          // Only update if we found drivers OR if current list is from fallback
+          // This prevents overwriting cache results with empty fallback
+          if (filteredDrivers.length > 0) {
+            setNearbyDrivers(filteredDrivers);
+            setStats({
+              regionCount: regionIds.length,
+              totalFromCache: 0,
+              afterDistanceFilter: filteredDrivers.length,
+              usingFallback: true
+            });
+          }
+        } catch (err) {
+          console.error('❌ [NearbyDriversOptimized] Fallback snapshot error:', err);
+        }
+      },
+      (error) => {
+        console.error('❌ [NearbyDriversOptimized] Fallback subscription error:', error);
       }
-      fallbackAttemptedRef.current = false; // Allow fallback to run again
-    }, 30000); // Every 30 seconds
+    );
 
+    // Cleanup subscription on unmount or when deps change
     return () => {
-      clearInterval(retryInterval);
+      if (__DEV__) {
+        console.log('📍 [NearbyDriversOptimized] Cleaning up fallback subscription');
+      }
+      unsubscribe();
+      setUsingFallback(false);
     };
-  }, [nearbyDrivers.length, enabled, clientLocation]);
+  }, [enabled, clientLocation?.latitude, clientLocation?.longitude, isLoading, nearbyDrivers.length, radiusKm, regionIds.length]);
 
   return {
     nearbyDrivers,
